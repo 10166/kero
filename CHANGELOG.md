@@ -12,6 +12,8 @@ set in the Xcode project.
 
 ## [unreleased]
 
+- Remember sidebar layout across relaunches: each window restores whether the left and right sidebars were open and which right panel (Files/Git/Info) was selected
+
 ## [0.1.20]
 
 - Security: stop terminal programs from silently reading your clipboard — an OSC 52 escape sequence (for example from a remote SSH host) could previously read the macOS clipboard without any prompt; kero now asks for confirmation first, matching the Ghostty app default (#8)
