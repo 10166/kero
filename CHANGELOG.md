@@ -13,6 +13,7 @@ set in the Xcode project.
 ## [unreleased]
 
 - Full-screen programs with their own background color (vim, htop, TUIs) now fill the terminal pane: the padding around the grid takes on the adjacent content's background instead of always showing the theme background, leaving only a hairline frame at the pane edges
+- Fix non-ASCII rendering in git diff view
 
 ## [0.1.21]
 
