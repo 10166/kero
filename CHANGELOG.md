@@ -12,6 +12,8 @@ set in the Xcode project.
 
 ## [unreleased]
 
+## [0.1.22]
+
 - Add “Open in Kero” to Finder’s folder context menu, opening each selected folder as a project with its terminal started there
 - Full-screen programs with their own background color (vim, htop, TUIs) now fill the terminal pane: the padding around the grid takes on the adjacent content's background instead of always showing the theme background, leaving only a hairline frame at the pane edges
 - Fix non-ASCII rendering in git diff view
