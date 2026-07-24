@@ -12,6 +12,8 @@ set in the Xcode project.
 
 ## [unreleased]
 
+- Fix the prompt line stopping short of the pane's bottom edge: the leftover space when the pane height isn't an exact multiple of the row height (previously all stacked under the last line, pushing the prompt up to a full row off the bottom) is now split evenly between the top and bottom insets
+
 ## [0.1.21]
 
 - Anchor the file tree and Git panel to the project directory — the closest git repository containing the terminal's directory — so they no longer re-root every time you `cd` inside a repo; outside a repository they keep following the terminal as before
