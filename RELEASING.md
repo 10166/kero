@@ -127,9 +127,10 @@ Verify with `rclone lsf r2:kero-releases --s3-no-check-bucket`.
 
 That's it. The script archives → exports a Developer ID app → builds a
 notarized, stapled **`.dmg`** → staples the app and zips it for Sparkle →
-attaches the matching `CHANGELOG.md` section as release notes → pulls existing
-archives from R2 (so Sparkle can build deltas) → regenerates `appcast.xml` →
-uploads the DMG and the update archives to R2. When it finishes:
+attaches the matching `CHANGELOG.md` section as release notes → pulls the 15
+most recent archives from R2 by default (so Sparkle can build deltas) →
+regenerates `appcast.xml` → uploads the DMG and the update archives to R2. When
+it finishes:
 
 - **Download link** (for the website): `https://releases.kero.sh/kero-<version>.dmg`
 - **In-app updates**: served from the same origin via the appcast.
@@ -149,6 +150,7 @@ Test by running an **older** build and choosing **Check for Updates…**.
 | `SIGN_IDENTITY` | `Developer ID Application` | codesigning identity for the DMG |
 | `EXPORT_OPTIONS` | `scripts/ExportOptions.plist` | export config |
 | `DOWNLOAD_URL_PREFIX` | `https://releases.kero.sh/` | base URL in the appcast |
+| `HISTORY_COUNT` | `15` | number of recent archives to pull for delta generation |
 | `FORCE=1` | — | re-release a version that already exists |
 | `NO_HISTORY=1` | — | skip pulling old archives (full updates, no deltas) |
 
@@ -177,5 +179,6 @@ Test by running an **older** build and choosing **Check for Updates…**.
 - Until the real `SUPublicEDKey` is in place, the app runs and checks the feed
   fine, but installing an update fails signature verification by design.
 - kero isn't sandboxed, so no Sparkle XPC services need bundling.
-- Old archives stay in R2 so users far behind still update and deltas can be
-  built. `build/` (local archives/exports) is git-ignored.
+- Old archives stay in R2 so users far behind can still download them. Only the
+  recent archives needed for new deltas are staged under `build/`, which is
+  git-ignored.
