@@ -1,0 +1,23 @@
+# Release artifacts produced by scripts/release.ts
+/build/
+
+# Bun / node deps
+/node_modules/
+
+# macOS
+.DS_Store
+
+## User settings
+xcuserdata/
+
+## Obj-C/Swift specific
+*.hmap
+
+## App packaging
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
