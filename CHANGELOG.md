@@ -12,7 +12,7 @@ set in the Xcode project.
 
 ## [unreleased]
 
-- Fix the prompt line stopping short of the pane's bottom edge: the leftover space when the pane height isn't an exact multiple of the row height (previously all stacked under the last line, pushing the prompt up to a full row off the bottom) is now split evenly between the top and bottom insets
+- Full-screen programs with their own background color (vim, htop, TUIs) now fill the terminal pane: the padding around the grid takes on the adjacent content's background instead of always showing the theme background, leaving only a hairline frame at the pane edges
 
 ## [0.1.21]
 
