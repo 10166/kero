@@ -12,6 +12,8 @@ set in the Xcode project.
 
 ## [unreleased]
 
+- Fix pasting clipboard images into image-aware TUIs such as Grok, and paste Finder-copied files as shell-safe absolute paths (#20)
+
 ## [0.1.22]
 
 - Add “Open in Kero” to Finder’s folder context menu, opening each selected folder as a project with its terminal started there
