@@ -10,6 +10,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com). Add a new
 `## [<version>]` section at the top for each release, matching the version you
 set in the Xcode project.
 
+## [0.1.18]
+
+- Fix max height of settings window
+
 ## [0.1.17]
 
 - Add pane zoom: ⇧⌘↩ toggles the focused pane filling the tab, with a header button indicating the state and exiting zoom
