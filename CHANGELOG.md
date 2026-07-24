@@ -10,6 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com). Add a new
 `## [<version>]` section at the top for each release, matching the version you
 set in the Xcode project.
 
+## [unreleased]
+
+- Fix fuzzy-looking terminal text: font thickening was unintentionally always on, making glyphs heavier and softer than stock Ghostty
+- Add a "Thicken font strokes" toggle in Settings → Font for those who prefer the heavier rendering
+
 ## [0.1.19]
 
 - Fix a releasing signing issue
