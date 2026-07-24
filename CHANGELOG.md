@@ -12,6 +12,8 @@ set in the Xcode project.
 
 ## [unrelease]
 
+- Add a tab switcher (ctrl-tab) to switch between tabs
+
 ## [0.1.24]
 
 - set TERM_PROGRAM to ghostty to get image rendering support
