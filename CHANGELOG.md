@@ -12,6 +12,10 @@ set in the Xcode project.
 
 ## [unrelease]
 
+## [0.1.24]
+
+- set TERM_PROGRAM to ghostty to get image rendering support
+
 ## [0.1.23]
 
 - Fix pasting clipboard images into image-aware TUIs such as Grok, and paste Finder-copied files as shell-safe absolute paths (#20)
