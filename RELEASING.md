@@ -164,7 +164,7 @@ Test by running an **older** build and choosing **Check for Updates…**.
 
 ## The Homebrew cask
 
-kero is also installable with `brew install --cask egoist/tap/kero`, from the
+kero is also installable with `brew install egoist/tap/kero`, from the
 cask at [`egoist/homebrew-tap`](https://github.com/egoist/homebrew-tap)
 (`Casks/kero.rb`). The cask downloads the same `.dmg` from R2, so it needs the
 new version and its `sha256` after every release.

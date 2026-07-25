@@ -20,7 +20,7 @@ https://kero.sh
 Or with Homebrew:
 
 ```sh
-brew install --cask egoist/tap/kero
+brew install egoist/tap/kero
 ```
 
 ## License
