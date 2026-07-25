@@ -12,6 +12,8 @@ set in the Xcode project.
 
 ## [unrelease]
 
+- Opening a large diff no longer freezes the window: diffs render only the rows on screen and highlight them off the main thread
+
 ## [0.1.25]
 
 - Add a tab switcher (ctrl-tab) to switch between tabs
