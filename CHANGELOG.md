@@ -13,6 +13,7 @@ set in the Xcode project.
 ## [unrelease]
 
 - Opening a large diff no longer freezes the window: diffs render only the rows on screen and highlight them off the main thread
+- The font setting now applies to the diff viewer too, so diffs match the terminal and the editor
 
 ## [0.1.25]
 
