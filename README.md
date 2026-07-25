@@ -17,6 +17,12 @@ A native terminal workspace for macOS.
 
 https://kero.sh
 
+Or with Homebrew:
+
+```sh
+brew install --cask egoist/tap/kero
+```
+
 ## License
 
 GPLv3

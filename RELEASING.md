@@ -138,6 +138,8 @@ it finishes:
 Notarizing the DMG also notarizes the app's code, so the script staples both from
 a single submission — the DMG for direct downloads, the app for the Sparkle zip.
 
+Finally it bumps the **Homebrew cask** (see below).
+
 Test by running an **older** build and choosing **Check for Updates…**.
 
 ### Options
@@ -151,8 +153,42 @@ Test by running an **older** build and choosing **Check for Updates…**.
 | `EXPORT_OPTIONS` | `scripts/ExportOptions.plist` | export config |
 | `DOWNLOAD_URL_PREFIX` | `https://releases.kero.sh/` | base URL in the appcast |
 | `HISTORY_COUNT` | `15` | number of recent archives to pull for delta generation |
+| `TAP_REPO` | `egoist/homebrew-tap` | tap holding the Homebrew cask |
+| `TAP_CASK` | `Casks/kero.rb` | cask path within the tap |
+| `TAP_DIR` | `build/homebrew-tap` | local checkout of the tap |
 | `FORCE=1` | — | re-release a version that already exists |
+| `NO_TAP=1` | — | skip bumping the Homebrew cask |
 | `NO_HISTORY=1` | — | skip pulling old archives (full updates, no deltas) |
+
+---
+
+## The Homebrew cask
+
+kero is also installable with `brew install --cask egoist/tap/kero`, from the
+cask at [`egoist/homebrew-tap`](https://github.com/egoist/homebrew-tap)
+(`Casks/kero.rb`). The cask downloads the same `.dmg` from R2, so it needs the
+new version and its `sha256` after every release.
+
+`scripts/release.ts` does that for you as its last step
+([`scripts/bump-cask.ts`](scripts/bump-cask.ts)): it hashes the DMG it just
+built, clones/refreshes the tap under `build/homebrew-tap`, rewrites the
+`version` and `sha256` stanzas, and pushes a `kero <version>` commit. It needs
+**push access to the tap over SSH** — nothing else.
+
+The bump runs *after* the upload, so the hash always covers a DMG that's already
+fetchable, and a failure there is a warning rather than a failed release — the
+release is live either way. Retry it on its own:
+
+```sh
+bun scripts/bump-cask.ts 1.1     # downloads the published DMG if it's not in build/
+```
+
+Re-running when the cask already names that version is a no-op. Set `NO_TAP=1`
+to skip the bump entirely.
+
+The cask's `depends_on macos:` mirrors the app's `LSMinimumSystemVersion`, which
+the bump doesn't touch — it only warns when the two drift apart. If you raise the
+deployment target, edit that stanza in the tap by hand.
 
 ---
 
