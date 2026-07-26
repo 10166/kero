@@ -12,6 +12,8 @@ set in the Xcode project.
 
 ## [unrelease]
 
+## [0.1.26]
+
 - Opening the Ctrl-Tab switcher no longer highlights whichever tab happens to be under the stationary pointer
 - The Processes list no longer shows `<defunct>` entries: those are exited children waiting to be reaped, not something you can see output from or kill
 - Opening a large diff no longer freezes the window: diffs render only the rows on screen and highlight them off the main thread
