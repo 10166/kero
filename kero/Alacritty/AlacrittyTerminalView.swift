@@ -1230,7 +1230,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         if let trackingArea { removeTrackingArea(trackingArea) }
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -1248,6 +1248,12 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         if terminalMode.contains(.mouseMotion), shouldReportMouse(event) {
             sendMouse(code: 35, event: event, released: false)
         }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        // SwiftUI chrome does not necessarily install a cursor rect, so clear
+        // the terminal's explicitly-set text cursor when leaving the surface.
+        NSCursor.arrow.set()
     }
 
     override func scrollWheel(with event: NSEvent) {
