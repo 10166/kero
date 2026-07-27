@@ -59,15 +59,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		FF3FDD6A300B6A7400112486 = {
-			isa = PBXGroup;
-			children = (
-				AA50000000000000000000A2 /* Config */,
-				FF3FDD75300B6A7400112486 /* kero */,
-				FF3FDD74300B6A7400112486 /* Products */,
-			);
-			sourceTree = "<group>";
-		};
 		AA50000000000000000000A2 /* Config */ = {
 			isa = PBXGroup;
 			children = (
@@ -75,6 +66,15 @@
 				AA50000000000000000000A1 /* Local.example.xcconfig */,
 			);
 			path = Config;
+			sourceTree = "<group>";
+		};
+		FF3FDD6A300B6A7400112486 = {
+			isa = PBXGroup;
+			children = (
+				AA50000000000000000000A2 /* Config */,
+				FF3FDD75300B6A7400112486 /* kero */,
+				FF3FDD74300B6A7400112486 /* Products */,
+			);
 			sourceTree = "<group>";
 		};
 		FF3FDD74300B6A7400112486 /* Products */ = {
@@ -326,7 +326,7 @@
 				CODE_SIGN_ENTITLEMENTS = kero/kero.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 34;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -336,6 +336,7 @@
 					"$(SRCROOT)/Vendor/alacritty-bridge/include",
 				);
 				INFOPLIST_FILE = kero/Info.plist;
+				KERO_DISPLAY_NAME = "Kero Debug";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -344,9 +345,8 @@
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)/alacritty-bridge",
 				);
-				KERO_DISPLAY_NAME = "Kero Debug";
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 0.1.28;
+				MARKETING_VERSION = 0.1.29;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lkero_alacritty",
@@ -373,7 +373,7 @@
 				CODE_SIGN_ENTITLEMENTS = kero/kero.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 34;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -383,6 +383,7 @@
 					"$(SRCROOT)/Vendor/alacritty-bridge/include",
 				);
 				INFOPLIST_FILE = kero/Info.plist;
+				KERO_DISPLAY_NAME = Kero;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -391,9 +392,8 @@
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)/alacritty-bridge",
 				);
-				KERO_DISPLAY_NAME = Kero;
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 0.1.28;
+				MARKETING_VERSION = 0.1.29;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lkero_alacritty",
