@@ -16,6 +16,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+## [0.1.28]
+
+- Tweak some UI colors
+
 ## [0.1.27]
 
 - Choose which terminal emulator drives new panes in Settings → Terminal → Backend. Ghostty remains the default, with a new Alacritty backend
