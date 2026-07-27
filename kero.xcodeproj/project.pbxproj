@@ -17,6 +17,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AA50000000000000000000A0 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		AA50000000000000000000A1 /* Local.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.example.xcconfig; sourceTree = "<group>"; };
 		FF3FDD73300B6A7400112486 /* Kero Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kero Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -60,9 +62,19 @@
 		FF3FDD6A300B6A7400112486 = {
 			isa = PBXGroup;
 			children = (
+				AA50000000000000000000A2 /* Config */,
 				FF3FDD75300B6A7400112486 /* kero */,
 				FF3FDD74300B6A7400112486 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		AA50000000000000000000A2 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				AA50000000000000000000A0 /* Debug.xcconfig */,
+				AA50000000000000000000A1 /* Local.example.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		FF3FDD74300B6A7400112486 /* Products */ = {
@@ -307,6 +319,7 @@
 		};
 		FF3FDD7F300B6A7600112486 /* Debug configuration for PBXNativeTarget "kero" */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA50000000000000000000A0 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon-Dev";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
