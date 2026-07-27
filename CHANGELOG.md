@@ -16,6 +16,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- Add `kero` command: run `kero` in any Kero terminal to create a project in the current directory, optionally with an argv to run directly (`kero vim ~/foo.js`); `kero +themes` browses themes with a live app-wide preview and saves the selection on Return
 - The Git panel now refreshes after commands and when Kero regains focus instead of polling continuously in the background
 
 ## [0.1.28]
