@@ -146,14 +146,14 @@ struct RightSidebarView: View {
                 Image(systemName: systemImage)
                     .sidebarFont(size: 10, weight: .medium)
                 Text(title)
-                    .sidebarFont(size: 11, weight: isActive ? .medium : .regular)
+                    .sidebarFont(size: 11, weight: .regular)
             }
-            .foregroundStyle(isActive ? .primary : .tertiary)
+            .foregroundStyle(isActive ? .primary : .secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isActive ? Color.primary.opacity(0.09) : .clear)
+                    .fill(isActive ? Color.primary.opacity(0.12) : .clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -200,7 +200,7 @@ private struct PanelHeader: View {
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .sidebarFont(size: 10)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
@@ -953,7 +953,12 @@ private struct GitPanel: View {
 
     private var commitBox: some View {
         VStack(spacing: 6) {
-            TextField(commitFieldPlaceholder, text: $commitMessage, axis: .vertical)
+            TextField(
+                "",
+                text: $commitMessage,
+                prompt: Text(commitFieldPlaceholder).foregroundStyle(.tertiary),
+                axis: .vertical
+            )
                 .textFieldStyle(.plain)
                 .sidebarFont(size: 11.5)
                 .lineLimit(1...4)
@@ -1532,11 +1537,11 @@ private struct GitSectionHeader: View {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.right")
                         .sidebarFont(size: 7, weight: .semibold)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                     Text(title)
-                        .sidebarFont(size: 9.5, weight: .semibold)
-                        .foregroundStyle(.tertiary)
+                        .sidebarFont(size: 9.5, weight: .regular)
+                        .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
             }
@@ -1550,7 +1555,7 @@ private struct GitSectionHeader: View {
                 } label: {
                     Image(systemName: "questionmark.circle")
                         .sidebarFont(size: 9)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .frame(width: 14, height: 14)
                         .contentShape(Rectangle())
                 }
@@ -1922,7 +1927,7 @@ private struct InfoPanel: View {
     private func directoryGroup(path: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(path)
-                .sidebarFont(size: 11, design: .monospaced)
+                .sidebarFont(size: 11)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .truncationMode(.head)
@@ -2034,7 +2039,7 @@ private struct InfoPanel: View {
     private func emptyRow(_ text: String) -> some View {
         Text(text)
             .sidebarFont(size: 11)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
     }
