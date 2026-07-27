@@ -322,8 +322,8 @@ private struct TerminalBackendHighlightRow: View {
         HStack(spacing: 4) {
             Image(systemName: highlight.isPositive
                 ? "checkmark.circle.fill"
-                : "xmark.circle.fill")
-                .foregroundStyle(highlight.isPositive ? Color.green : Color.red)
+                : "exclamationmark.circle.fill")
+                .foregroundStyle(highlight.isPositive ? Color.green : Color.orange)
             Text(highlight.title)
                 .foregroundStyle(.primary)
                 .lineLimit(1)

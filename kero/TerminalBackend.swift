@@ -63,8 +63,9 @@ enum TerminalBackend: String, CaseIterable, Identifiable, Sendable {
             [
                 .init(title: "Excellent performance", isPositive: true),
                 .init(title: "GPU-accelerated", isPositive: true),
-                .init(title: "Low memory footprint", isPositive: true),
+                .init(title: "Higher memory footprint", isPositive: false),
                 .init(title: "Image rendering", isPositive: true),
+                .init(title: "Stable", isPositive: true),
             ]
         case .alacritty:
             [
@@ -72,6 +73,7 @@ enum TerminalBackend: String, CaseIterable, Identifiable, Sendable {
                 .init(title: "GPU-accelerated", isPositive: true),
                 .init(title: "Lower memory footprint", isPositive: true),
                 .init(title: "Image rendering", isPositive: true),
+                .init(title: "Experimental", isPositive: false),
             ]
         }
     }
