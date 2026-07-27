@@ -19,9 +19,20 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header-height strip housing the traffic-light buttons.
-            WindowDragArea()
-                .frame(height: 38)
+            // Header-height strip housing the traffic-light buttons and the
+            // control for collapsing this sidebar.
+            HStack(spacing: 0) {
+                WindowDragArea()
+                    .frame(maxWidth: .infinity)
+                ChromeIconButton(
+                    systemImage: "sidebar.left",
+                    tooltip: "Toggle Left Sidebar (⌘B)"
+                ) {
+                    manager.toggleLeftSidebar()
+                }
+            }
+            .padding(.trailing, 8)
+            .frame(height: 38)
 
             ScrollView {
                 VStack(spacing: 3) {
@@ -131,6 +142,36 @@ struct SidebarView: View {
     }
 }
 
+struct ChromeIconButton: View {
+    let systemImage: String
+    let tooltip: String
+    var font: Font = .system(size: 12, weight: .medium)
+    var iconSize: CGFloat = 16
+    var tooltipEdge: TooltipEdge = .below
+    var tooltipAlignment: HorizontalAlignment = .trailing
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(font)
+                .foregroundStyle(isHovering ? .primary : .secondary)
+                .frame(width: iconSize, height: iconSize)
+                .padding(4)
+                .background {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovering ? Color.primary.opacity(0.08) : .clear)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .tooltip(tooltip, edge: tooltipEdge, alignment: tooltipAlignment)
+    }
+}
+
 private struct SidebarFooterButton: View {
     let systemImage: String
     let tooltip: String
@@ -139,19 +180,14 @@ private struct SidebarFooterButton: View {
     var tooltipAlignment: HorizontalAlignment = .leading
     let action: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isHovering ? .primary : .secondary)
-                .frame(width: 24, height: 24)
-                .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .tooltip(tooltip, alignment: tooltipAlignment)
+        ChromeIconButton(
+            systemImage: systemImage,
+            tooltip: tooltip,
+            tooltipEdge: .above,
+            tooltipAlignment: tooltipAlignment,
+            action: action
+        )
     }
 }
 
