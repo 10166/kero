@@ -78,6 +78,30 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Sidebar") {
+                HStack {
+                    Text("Font size")
+                    Slider(
+                        value: $settings.sidebarFontSize,
+                        in: AppSettings.sidebarFontSizeRange,
+                        step: 1
+                    )
+                    .accessibilityLabel("Sidebar font size")
+                    Text("\(Int(settings.sidebarFontSize)) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
+                    Stepper(
+                        "",
+                        value: $settings.sidebarFontSize,
+                        in: AppSettings.sidebarFontSizeRange,
+                        step: 1
+                    )
+                    .labelsHidden()
+                    .accessibilityLabel("Sidebar font size")
+                }
+            }
+
             Section("Preview") {
                 // Exercises regular/bold plus Nerd Font icon fallback.
                 VStack(alignment: .leading, spacing: 6) {
@@ -145,6 +169,7 @@ struct SettingsView: View {
                     }
                     .disabled(settings.fontFamily.isEmpty
                         && settings.fontSize == AppSettings.defaultFontSize
+                        && settings.sidebarFontSize == AppSettings.defaultSidebarFontSize
                         && !settings.fontThicken
                         && settings.theme == .system
                         && settings.themeDark == Theme.defaultDarkThemeName

@@ -31,6 +31,8 @@ final class AppSettings: nonisolated ObservableObject {
 
     static let defaultFontSize: Double = 13
     static let fontSizeRange: ClosedRange<Double> = 8...32
+    static let defaultSidebarFontSize: Double = 13
+    static let sidebarFontSizeRange: ClosedRange<Double> = 9...18
 
     /// Light/dark appearance override; `system` follows macOS.
     @Published var theme: AppTheme {
@@ -64,6 +66,12 @@ final class AppSettings: nonisolated ObservableObject {
     }
 
     @Published var fontSize: Double {
+        didSet { save() }
+    }
+
+    /// Base text size for both sidebars. Each panel preserves its relative
+    /// hierarchy for section labels, content, metadata, and controls.
+    @Published var sidebarFontSize: Double {
         didSet { save() }
     }
 
@@ -113,6 +121,11 @@ final class AppSettings: nonisolated ObservableObject {
         fontFamily = toml["font-family"]?.string ?? ""
         let size = toml["font-size"]?.double ?? Self.defaultFontSize
         fontSize = Self.fontSizeRange.contains(size) ? size : Self.defaultFontSize
+        let sidebarSize = toml["sidebar.font-size"]?.double
+            ?? Self.defaultSidebarFontSize
+        sidebarFontSize = Self.sidebarFontSizeRange.contains(sidebarSize)
+            ? sidebarSize
+            : Self.defaultSidebarFontSize
         fontThicken = toml["terminal.font-thicken"]?.bool
             ?? toml["font-thicken"]?.bool
             ?? false
@@ -152,6 +165,7 @@ final class AppSettings: nonisolated ObservableObject {
     func resetFont() {
         fontFamily = ""
         fontSize = Self.defaultFontSize
+        sidebarFontSize = Self.defaultSidebarFontSize
         fontThicken = false
     }
 
@@ -182,6 +196,9 @@ final class AppSettings: nonisolated ObservableObject {
             lines.append("font-family = \(TOML.quote(fontFamily))")
         }
         lines.append("font-size = \(TOML.number(fontSize))")
+        if sidebarFontSize != Self.defaultSidebarFontSize {
+            lines.append("sidebar.font-size = \(TOML.number(sidebarFontSize))")
+        }
         if fontThicken {
             lines.append("terminal.font-thicken = true")
         }

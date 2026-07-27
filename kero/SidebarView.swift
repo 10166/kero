@@ -10,6 +10,7 @@ import SwiftUI
 /// its sessions show as horizontal tabs in the main header.
 struct SidebarView: View {
     @ObservedObject var manager: TerminalManager
+    @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var colorScheme
@@ -45,7 +46,8 @@ struct SidebarView: View {
                             close: { manager.close(project) },
                             isDragging: draggedProjectID == project.id,
                             onDrag: { updateProjectDrag(source: project.id, location: $0) },
-                            onDragEnded: endProjectDrag
+                            onDragEnded: endProjectDrag,
+                            fontSize: settings.sidebarFontSize
                         )
                         .background {
                             GeometryReader { proxy in
@@ -209,6 +211,7 @@ private struct SidebarProjectRow: View {
     let isDragging: Bool
     let onDrag: (CGPoint) -> Void
     let onDragEnded: () -> Void
+    let fontSize: Double
 
     @State private var isHovering = false
     @State private var isRenaming = false
@@ -296,7 +299,7 @@ private struct SidebarProjectRow: View {
                 if isRenaming {
                     TextField("", text: $renameDraft)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: fontSize, weight: .medium))
                         .focused($renameFocused)
                         .onSubmit(commitRename)
                         .onExitCommand { isRenaming = false }
@@ -307,7 +310,7 @@ private struct SidebarProjectRow: View {
                         }
                 } else {
                     Text(project.name)
-                        .font(.system(size: 12))
+                        .font(.system(size: fontSize))
                         .foregroundStyle(isSelected ? .primary : .secondary)
                         .lineLimit(1)
                 }
@@ -327,7 +330,7 @@ private struct SidebarProjectRow: View {
                 .buttonStyle(.plain)
             } else if index < 9, !isRenaming {
                 Text("⌘\(index + 1)")
-                    .font(.system(size: 10))
+                    .font(.system(size: supportingFontSize))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -354,12 +357,16 @@ private struct SidebarProjectRow: View {
     private var subtitle: some View {
         if project.sessions.count > 1 {
             Text("\(project.sessions.count) sessions")
-                .font(.system(size: 10))
+                .font(.system(size: supportingFontSize))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
         } else if let session = project.selectedSession {
-            SessionDirectoryLabel(session: session)
+            SessionDirectoryLabel(session: session, fontSize: supportingFontSize)
         }
+    }
+
+    private var supportingFontSize: Double {
+        max(fontSize - 2, AppSettings.sidebarFontSizeRange.lowerBound - 1)
     }
 }
 
@@ -367,11 +374,12 @@ private struct SidebarProjectRow: View {
 /// it observes the session's own published working directory.
 private struct SessionDirectoryLabel: View {
     @ObservedObject var session: TerminalSession
+    let fontSize: Double
 
     var body: some View {
         if let dir = session.directoryLabel {
             Text(dir)
-                .font(.system(size: 10))
+                .font(.system(size: fontSize))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
         }
