@@ -10,7 +10,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com). Add a new
 `## [<version>]` section at the top for each release, matching the version you
 set in the Xcode project.
 
+Write release notes for the final product users receive, not the development
+history. When a feature is still unreleased, fold its fixes and refinements into
+the original feature bullet instead of adding separate entries for them.
+
 ## [unrelease]
+
+- Choose which terminal emulator drives new panes in Settings → Terminal → Backend. Ghostty remains the default, with a new Alacritty backend
 
 ## [0.1.26]
 

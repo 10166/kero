@@ -6,7 +6,7 @@ A native terminal workspace for macOS.
 
 ## Features
 
-- Swift + libghostty
+- Swift + libghostty by default, with an optional Alacritty backend
 - Native design
 - Split panes
 - Git intergration
