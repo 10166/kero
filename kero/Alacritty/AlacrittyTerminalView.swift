@@ -582,6 +582,9 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             width: size.width * scale, height: size.height * scale
         )
         guard let drawable = metalLayer.nextDrawable() else { return false }
+        // Keep the IOSurface before render schedules this drawable for
+        // presentation. Accessing drawable.texture afterward is invalid.
+        let drawableSurface = drawable.texture.iosurface
 
         var snapshot = KeroSnapshot()
         kero_alacritty_snapshot(handle, &snapshot)
@@ -630,7 +633,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             waitUntilCompleted: waitUntilCompleted
         )
         if submitted {
-            lastPresentedSurface = drawable.texture.iosurface
+            lastPresentedSurface = drawableSurface
         }
         if submitted, waitUntilCompleted {
             lastPresentedSize = size
@@ -849,7 +852,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         case KERO_EVENT_CLIPBOARD_LOAD:
             guard payload.count == MemoryLayout<UInt64>.size else { return }
             var requestID: UInt64 = 0
-            withUnsafeMutableBytes(of: &requestID) { bytes in
+            _ = withUnsafeMutableBytes(of: &requestID) { bytes in
                 payload.copyBytes(to: bytes)
             }
             requestID = UInt64(littleEndian: requestID)
