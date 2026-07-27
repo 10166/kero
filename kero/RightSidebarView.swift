@@ -759,10 +759,10 @@ private struct GitPanel: View {
             HStack(spacing: 5) {
                 Image(systemName: model.hasUpstream ? "arrow.triangle.2.circlepath" : "icloud.slash")
                     .sidebarFont(size: 9, weight: .medium)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                 Text(model.upstream ?? (branch == "detached HEAD" ? "Detached HEAD" : "Unpublished branch"))
                     .sidebarFont(size: 9.5)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
@@ -1537,12 +1537,11 @@ private struct GitSectionHeader: View {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.right")
                         .sidebarFont(size: 7, weight: .semibold)
-                        .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                     Text(title)
-                        .sidebarFont(size: 9.5, weight: .regular)
-                        .foregroundStyle(.secondary)
+                        .sidebarFont(size: 9.5, weight: .medium)
                 }
+                .foregroundStyle(Color.secondary.opacity(0.7))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
