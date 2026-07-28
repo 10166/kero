@@ -403,7 +403,7 @@ final class TerminalManager: nonisolated ObservableObject {
         let project = selectedProject ?? newProject()
         project.newBrowserTab(
             initialURL: initialURL,
-            focusesAddressBar: initialURL == nil
+            initialFocus: initialURL == nil ? .addressBar : .webContent
         )
     }
 
@@ -415,7 +415,7 @@ final class TerminalManager: nonisolated ObservableObject {
         selectedProject?.newBrowserPane(
             toward: edge,
             initialURL: initialURL,
-            focusesAddressBar: initialURL == nil
+            initialFocus: initialURL == nil ? .addressBar : .webContent
         )
     }
 

@@ -518,6 +518,7 @@ private struct PaneView: View {
         case .browser(let browser):
             BrowserView(
                 browser: browser,
+                isFocused: isFocused,
                 onFocused: focus,
                 onNewBrowserTab: newBrowserTabFromMenu,
                 onNewBrowserPane: newBrowserPaneFromMenu

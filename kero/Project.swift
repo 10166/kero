@@ -276,17 +276,16 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     // MARK: - Browser
 
-    /// Opens a native browser as a new tab beside the current selection. A
-    /// blank tab focuses its combined address/search field immediately.
+    /// Opens a native browser as a new tab beside the current selection.
     @discardableResult
     func newBrowserTab(
         initialURL: String? = nil,
-        focusesAddressBar: Bool = true
+        initialFocus: BrowserTab.InitialFocus = .addressBar
     ) -> BrowserTab {
         let context = selectedSession
         let browser = makeBrowser(
             initialURL: initialURL,
-            focusesAddressBar: focusesAddressBar
+            initialFocus: initialFocus
         )
         let tab = makeTab(content: .browser(browser))
         tab.contextSession = context
@@ -296,18 +295,17 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     /// Opens a native browser to the right of the focused pane in the current
-    /// tab. Unlike a normal terminal split, the new pane owns a WKWebView and
-    /// immediately focuses its combined address/search field.
+    /// tab. Unlike a normal terminal split, the new pane owns a WKWebView.
     @discardableResult
     func newBrowserPane(
         toward edge: PaneDropEdge = .right,
         initialURL: String? = nil,
-        focusesAddressBar: Bool = true
+        initialFocus: BrowserTab.InitialFocus = .addressBar
     ) -> BrowserTab? {
         guard let tab = selectedTab, tab.canSplit else { return nil }
         let browser = makeBrowser(
             initialURL: initialURL,
-            focusesAddressBar: focusesAddressBar
+            initialFocus: initialFocus
         )
         tab.split(Pane(content: .browser(browser)), toward: edge)
         return browser
@@ -315,11 +313,11 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     private func makeBrowser(
         initialURL: String?,
-        focusesAddressBar: Bool
+        initialFocus: BrowserTab.InitialFocus
     ) -> BrowserTab {
         let browser = BrowserTab(
             initialURL: initialURL,
-            focusesAddressBar: focusesAddressBar
+            initialFocus: initialFocus
         )
         browserObservations[browser.id] = browser.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -614,7 +612,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             if let editorState { file.editorState = editorState }
             return .file(file)
         case .browser(let url):
-            return .browser(makeBrowser(initialURL: url, focusesAddressBar: false))
+            return .browser(makeBrowser(initialURL: url, initialFocus: .none))
         case .diff(let repoRoot, let path, let staged, let untracked, let origPath):
             return .diff(DiffTab(
                 repoRoot: repoRoot, path: path, staged: staged,

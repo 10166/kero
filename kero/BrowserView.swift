@@ -149,6 +149,12 @@ final class BrowserWebView: WKWebView {
 /// preserves page state, history, forms, and scroll position.
 @MainActor
 final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
+    enum InitialFocus {
+        case addressBar
+        case webContent
+        case none
+    }
+
     nonisolated let id = UUID()
 
     @Published private(set) var title = String(localized: "New Tab")
@@ -167,7 +173,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     private var pageTitle: String?
     private var observations: Set<AnyCancellable> = []
-    private var focusesAddressBarOnFirstAppearance: Bool
+    private var initialFocus: InitialFocus?
     private let contextMenuBridge: BrowserContextMenuBridge
     private var faviconTask: Task<Void, Never>?
     private var faviconRevision: UInt = 0
@@ -201,7 +207,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     })()
     """#
 
-    init(initialURL: String? = nil, focusesAddressBar: Bool = true) {
+    init(
+        initialURL: String? = nil,
+        initialFocus: InitialFocus = .addressBar
+    ) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -222,7 +231,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
         self.contextMenuBridge = contextMenuBridge
         webView = BrowserWebView(frame: .zero, configuration: configuration)
-        focusesAddressBarOnFirstAppearance = focusesAddressBar
+        self.initialFocus = initialFocus
         super.init()
 
         contextMenuBridge.webView = webView
@@ -257,10 +266,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         urlString.isEmpty
     }
 
-    func consumeInitialAddressFocus() -> Bool {
-        guard focusesAddressBarOnFirstAppearance else { return false }
-        focusesAddressBarOnFirstAppearance = false
-        return true
+    func consumeInitialFocus() -> InitialFocus? {
+        defer { initialFocus = nil }
+        return initialFocus
     }
 
     func requestAddressFocus() {
@@ -728,6 +736,7 @@ struct BrowserFaviconView: View {
 /// so it follows Kero's appearance while the page remains a real WKWebView.
 struct BrowserView: View {
     @ObservedObject var browser: BrowserTab
+    let isFocused: Bool
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
     let onNewBrowserPane: (String?) -> Void
@@ -736,6 +745,7 @@ struct BrowserView: View {
     @State private var address = ""
     @State private var addressFocused = false
     @State private var addressFocusRequest: UInt = 0
+    @State private var webContentFocusRequest: UInt = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -745,7 +755,8 @@ struct BrowserView: View {
                     browser: browser,
                     onFocused: onFocused,
                     onNewBrowserTab: onNewBrowserTab,
-                    onNewBrowserPane: onNewBrowserPane
+                    onNewBrowserPane: onNewBrowserPane,
+                    focusRequest: webContentFocusRequest
                 )
 
                 if browser.isBlank {
@@ -769,9 +780,20 @@ struct BrowserView: View {
         .background(Color(nsColor: Theme.background))
         .onAppear {
             address = browser.urlString
-            if browser.consumeInitialAddressFocus() {
-                focusAddressField()
-            }
+        }
+        .task(id: browser.id) {
+            // A split can transiently mount this view while the grid settles.
+            // SwiftUI cancels this task if that mount is discarded, preserving
+            // the one-shot request for the stable browser view.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard !Task.isCancelled else { return }
+            let initialFocus = browser.consumeInitialFocus()
+            guard isFocused else { return }
+            applyFocus(initialFocus ?? currentFocusStrategy)
+        }
+        .onChange(of: isFocused) { _, focused in
+            guard focused else { return }
+            applyFocus(currentFocusStrategy)
         }
         .onChange(of: browser.urlString) { _, value in
             if !addressFocused {
@@ -972,6 +994,21 @@ struct BrowserView: View {
     private func focusAddressField() {
         addressFocusRequest &+= 1
     }
+
+    private var currentFocusStrategy: BrowserTab.InitialFocus {
+        browser.isBlank ? .addressBar : .webContent
+    }
+
+    private func applyFocus(_ strategy: BrowserTab.InitialFocus) {
+        switch strategy {
+        case .addressBar:
+            focusAddressField()
+        case .webContent:
+            webContentFocusRequest &+= 1
+        case .none:
+            break
+        }
+    }
 }
 
 /// NSTextField owns a private field editor while it is active. Selecting from a
@@ -989,8 +1026,13 @@ private final class BrowserAddressTextField: NSTextField {
         super.mouseDown(with: event)
     }
 
-    func focusAndSelectAll() {
+    @discardableResult
+    func focusAndSelectAll() -> Bool {
+        guard let window, window.makeFirstResponder(self) else {
+            return false
+        }
         selectText(nil)
+        return true
     }
 }
 
@@ -1036,14 +1078,12 @@ private struct BrowserAddressField: NSViewRepresentable {
         }
         guard focusRequest != context.coordinator.handledFocusRequest else { return }
         context.coordinator.handledFocusRequest = focusRequest
-        DispatchQueue.main.async { [weak field] in
-            field?.focusAndSelectAll()
-        }
+        context.coordinator.focus(field)
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var text: Binding<String>
-        var handledFocusRequest: UInt
+        var handledFocusRequest: UInt?
         private var onFocus: () -> Void
         private var onBlur: () -> Void
         private var onSubmit: () -> Void
@@ -1058,7 +1098,9 @@ private struct BrowserAddressField: NSViewRepresentable {
             onCancel: @escaping () -> Void
         ) {
             self.text = text
-            handledFocusRequest = focusRequest
+            // onAppear may issue the initial request before SwiftUI creates
+            // this coordinator. A nonzero value is pending in that case.
+            handledFocusRequest = focusRequest == 0 ? 0 : nil
             self.onFocus = onFocus
             self.onBlur = onBlur
             self.onSubmit = onSubmit
@@ -1071,6 +1113,29 @@ private struct BrowserAddressField: NSViewRepresentable {
             onBlur = field.onBlur
             onSubmit = field.onSubmit
             onCancel = field.onCancel
+        }
+
+        func focus(_ field: BrowserAddressTextField) {
+            // A newly inserted split can update before AppKit has attached its
+            // field to the window. Keep the one-shot request alive briefly.
+            focus(field, attemptsRemaining: 6)
+        }
+
+        private func focus(
+            _ field: BrowserAddressTextField,
+            attemptsRemaining: Int
+        ) {
+            DispatchQueue.main.async { [weak self, weak field] in
+                guard let self, let field else { return }
+                if field.focusAndSelectAll() { return }
+                guard attemptsRemaining > 1 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    self.focus(
+                        field,
+                        attemptsRemaining: attemptsRemaining - 1
+                    )
+                }
+            }
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {
@@ -1115,6 +1180,11 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
     let onNewBrowserPane: (String?) -> Void
+    let focusRequest: UInt
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(handledFocusRequest: focusRequest)
+    }
 
     func makeNSView(context: Context) -> BrowserWebView {
         browser.webView.onFocused = onFocused
@@ -1127,11 +1197,56 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
         webView.onFocused = onFocused
         webView.onNewBrowserTab = onNewBrowserTab
         webView.onNewBrowserPane = onNewBrowserPane
+        guard focusRequest != context.coordinator.handledFocusRequest else {
+            return
+        }
+        context.coordinator.handledFocusRequest = focusRequest
+        context.coordinator.focus(webView)
     }
 
-    static func dismantleNSView(_ webView: BrowserWebView, coordinator: ()) {
+    static func dismantleNSView(
+        _ webView: BrowserWebView,
+        coordinator: Coordinator
+    ) {
         webView.onFocused = nil
         webView.onNewBrowserTab = nil
         webView.onNewBrowserPane = nil
+    }
+
+    final class Coordinator {
+        var handledFocusRequest: UInt?
+
+        init(handledFocusRequest: UInt) {
+            // Preserve a request issued before the representable was mounted.
+            self.handledFocusRequest = handledFocusRequest == 0
+                ? 0
+                : nil
+        }
+
+        func focus(_ webView: BrowserWebView) {
+            // Split insertion can race the AppKit attachment just like the
+            // address field; retry only until WebKit accepts first responder.
+            focus(webView, attemptsRemaining: 6)
+        }
+
+        private func focus(
+            _ webView: BrowserWebView,
+            attemptsRemaining: Int
+        ) {
+            DispatchQueue.main.async { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                if let window = webView.window,
+                   window.makeFirstResponder(webView) {
+                    return
+                }
+                guard attemptsRemaining > 1 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    self.focus(
+                        webView,
+                        attemptsRemaining: attemptsRemaining - 1
+                    )
+                }
+            }
+        }
     }
 }
