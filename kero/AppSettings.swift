@@ -83,6 +83,13 @@ final class AppSettings: nonisolated ObservableObject {
         didSet { save() }
     }
 
+    /// Send Option-key chords to terminal programs as Alt/Meta instead of
+    /// letting the active macOS input source produce text. Off by default so
+    /// layouts such as Polish Pro can type their Option-composed characters.
+    @Published var macosOptionAsAlt: Bool {
+        didSet { save() }
+    }
+
     /// Soft-wrap file editor lines to the viewport width. Off by default so
     /// long lines scroll horizontally.
     @Published var wrapLines: Bool {
@@ -129,6 +136,7 @@ final class AppSettings: nonisolated ObservableObject {
         fontThicken = toml["terminal.font-thicken"]?.bool
             ?? toml["font-thicken"]?.bool
             ?? false
+        macosOptionAsAlt = toml["terminal.macos-option-as-alt"]?.bool ?? false
         wrapLines = toml["editor.wrap-lines"]?.bool ?? false
         restoreTerminalHistory = toml["terminal.restore-history"]?.bool ?? false
         terminalBackend = TerminalBackend(persisted: toml["terminal.backend"]?.string)
@@ -174,6 +182,7 @@ final class AppSettings: nonisolated ObservableObject {
         theme = .system
         themeDark = Theme.defaultDarkThemeName
         themeLight = Theme.defaultLightThemeName
+        macosOptionAsAlt = false
         wrapLines = false
         restoreTerminalHistory = false
         terminalBackend = .fallback
@@ -201,6 +210,9 @@ final class AppSettings: nonisolated ObservableObject {
         }
         if fontThicken {
             lines.append("terminal.font-thicken = true")
+        }
+        if macosOptionAsAlt {
+            lines.append("terminal.macos-option-as-alt = true")
         }
         if wrapLines {
             lines.append("editor.wrap-lines = true")

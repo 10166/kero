@@ -33,7 +33,11 @@ struct AlacrittyTerminalMode: OptionSet {
 enum AlacrittyKeyMap {
     /// Bytes for `event`, or nil when the key should fall through to AppKit
     /// (IME composition, or a shortcut Kero's menus own).
-    static func bytes(for event: NSEvent, mode: AlacrittyTerminalMode) -> [UInt8]? {
+    static func bytes(
+        for event: NSEvent,
+        mode: AlacrittyTerminalMode,
+        optionAsAlt: Bool
+    ) -> [UInt8]? {
         let flags = event.modifierFlags
         if flags.contains(.command) {
             // Match the terminal-local bindings installed for Ghostty. Other
@@ -47,9 +51,9 @@ enum AlacrittyKeyMap {
         }
 
         let control = flags.contains(.control)
-        // Kero's Ghostty panes run with `macos-option-as-alt`, so Option is a
-        // Meta prefix here too rather than composing accented characters.
-        let alt = flags.contains(.option)
+        // When Option-as-Alt is disabled, leave Option-modified text to
+        // NSTextInputClient so the active macOS input source can compose it.
+        let alt = optionAsAlt && flags.contains(.option)
         let shift = flags.contains(.shift)
 
         if let special = specialKey(event, mode: mode, shift: shift, control: control, alt: alt) {

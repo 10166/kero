@@ -118,12 +118,12 @@ final class TerminalManager: nonisolated ObservableObject {
         for directory in queuedDirectories {
             newProject(directory: directory)
         }
-        // Re-theme live sessions only when font, appearance, or terminal
-        // theme settings change. Delivery is scheduled onto the main queue
-        // because @Published emits in willSet — by then `didSet` has pushed
-        // the theme onto NSApp (and the selection into `Theme`), so
+        // Reconfigure live sessions only when font, appearance, theme, or
+        // terminal input settings change. Delivery is scheduled onto the main
+        // queue because @Published emits in willSet — by then `didSet` has
+        // pushed the theme onto NSApp (and the selection into `Theme`), so
         // `refreshAppearance` reads the new state.
-        settingsObservation = Publishers.CombineLatest(
+        settingsObservation = Publishers.CombineLatest3(
             Publishers.CombineLatest4(
                 AppSettings.shared.$fontFamily.removeDuplicates(),
                 AppSettings.shared.$fontSize.removeDuplicates(),
@@ -133,7 +133,8 @@ final class TerminalManager: nonisolated ObservableObject {
             Publishers.CombineLatest(
                 AppSettings.shared.$themeDark.removeDuplicates(),
                 AppSettings.shared.$themeLight.removeDuplicates()
-            )
+            ),
+            AppSettings.shared.$macosOptionAsAlt.removeDuplicates()
         )
             .dropFirst()
             .receive(on: DispatchQueue.main)

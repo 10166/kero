@@ -1178,10 +1178,14 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             return
         }
 
-        // Ctrl / Option / special keys encode as terminal sequences. Plain
-        // text returns nil from the key map so CJK IMEs can start composition
-        // instead of each Latin keycap being written straight to the PTY.
-        if let bytes = AlacrittyKeyMap.bytes(for: event, mode: terminalMode) {
+        // Ctrl / enabled Option-as-Alt / special keys encode as terminal
+        // sequences. Text returns nil from the key map so macOS input sources
+        // can compose before committed Unicode reaches `insertText`.
+        if let bytes = AlacrittyKeyMap.bytes(
+            for: event,
+            mode: terminalMode,
+            optionAsAlt: AppSettings.shared.macosOptionAsAlt
+        ) {
             write(bytes)
             return
         }

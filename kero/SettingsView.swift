@@ -137,6 +137,14 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
                 Toggle(
+                    "Use Option as Alt/Meta",
+                    isOn: $settings.macosOptionAsAlt
+                )
+                Text("Sends Option-key combinations to terminal programs as Meta shortcuts instead of macOS text input.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Toggle(
                     "Restore session history on relaunch",
                     isOn: $settings.restoreTerminalHistory
                 )
@@ -171,6 +179,7 @@ struct SettingsView: View {
                         && settings.fontSize == AppSettings.defaultFontSize
                         && settings.sidebarFontSize == AppSettings.defaultSidebarFontSize
                         && !settings.fontThicken
+                        && !settings.macosOptionAsAlt
                         && settings.theme == .system
                         && settings.themeDark == Theme.defaultDarkThemeName
                         && settings.themeLight == Theme.defaultLightThemeName
