@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- File previews now refresh after files are changed outside Kero
+
 ## [0.1.30]
 
 - Fix Chinese IME under Alacritty backend
