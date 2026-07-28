@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+## [0.1.32]
+
 - Add native English, Simplified Chinese, and Japanese localization throughout the app, with a language picker in Settings
 - Search and open files from the project directory in the command palette
 - Open native browser tabs and split panes from the command palette or terminal/editor context menus, with a combined address/search field, navigation controls, page sharing, and restored URLs
