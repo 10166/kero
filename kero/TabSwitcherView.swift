@@ -684,6 +684,8 @@ private struct TabPaneThumbnail: View {
                 terminal(session)
             case .file(let file):
                 filePreview(file)
+            case .browser(let browser):
+                browserPreview(browser)
             case .diff(let diff):
                 diffPreview(diff)
             }
@@ -765,6 +767,26 @@ private struct TabPaneThumbnail: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(4)
+    }
+
+    private func browserPreview(_ browser: BrowserTab) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: browser.isLoading ? "globe.americas.fill" : "globe")
+                .font(.system(size: 17, weight: .light))
+                .foregroundStyle(Color(nsColor: Theme.accent))
+            Text(browser.title)
+                .font(.system(size: 8, weight: .medium))
+                .lineLimit(1)
+            if !browser.urlString.isEmpty {
+                Text(browser.urlString)
+                    .font(.system(size: 5.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(6)
     }
 
     private var terminalForeground: NSColor {

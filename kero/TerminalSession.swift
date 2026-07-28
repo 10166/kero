@@ -138,6 +138,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         surface.setSurfaceVisible(false)
         surface.onBecomeFirstResponder = nil
         surface.splitTarget.onSplit = nil
+        surface.splitTarget.onNewBrowserTab = nil
+        surface.splitTarget.onNewBrowserPane = nil
 
         if processAlive {
             _ = shellPid // Cache it before `hasExited` changes.

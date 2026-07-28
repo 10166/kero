@@ -44,7 +44,16 @@ struct ContentView: View {
                     }
                     Group {
                         if let tab = manager.selectedProject?.selectedTab {
-                            PaneLayoutView(tab: tab, onSplit: { manager.split(toward: $0) })
+                            PaneLayoutView(
+                                tab: tab,
+                                onSplit: { manager.split(toward: $0) },
+                                onNewBrowserTab: {
+                                    manager.newBrowserTab(initialURL: $0)
+                                },
+                                onNewBrowserPane: {
+                                    manager.newBrowserPane(initialURL: $0)
+                                }
+                            )
                         } else {
                             emptyState
                         }
@@ -390,6 +399,18 @@ private struct SessionTabsView: View {
             }
             Divider()
         }
+        if case .browser(let browser) = tab.focusedContent,
+           !browser.urlString.isEmpty {
+            Button("Open in Default Browser") {
+                browser.openInDefaultBrowser()
+            }
+            .disabled(browser.shareURL == nil)
+            Button("Copy Address") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(browser.urlString, forType: .string)
+            }
+            Divider()
+        }
         Button("Close") { project.close(tab) }
         Button("Close Others") { project.closeOthers(tab) }
             .disabled(project.tabs.count <= 1)
@@ -439,6 +460,8 @@ private struct PaneTabItem: View {
                 SessionTabLabel(session: session, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
             case .file(let file):
                 FileTabLabel(file: file, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
+            case .browser(let browser):
+                BrowserTabLabel(browser: browser, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
             case .diff(let diff):
                 TabItemChrome(
                     systemImage: "plus.forwardslash.minus",
@@ -560,6 +583,28 @@ private struct FileTabLabel: View {
             close: close
         )
         .help(file.path)
+    }
+}
+
+private struct BrowserTabLabel: View {
+    @ObservedObject var browser: BrowserTab
+    /// User-assigned tab name overriding the webpage title.
+    var customTitle: String?
+    let paneCount: Int
+    let isSelected: Bool
+    let select: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        TabItemChrome(
+            systemImage: "globe",
+            title: customTitle ?? browser.title,
+            paneCount: paneCount,
+            isSelected: isSelected,
+            select: select,
+            close: close
+        )
+        .help(browser.urlString)
     }
 }
 

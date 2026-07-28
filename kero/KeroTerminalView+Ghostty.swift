@@ -211,6 +211,12 @@ extension KeroTerminalView: TerminalSurfaceOpenURLDelegate {
     }
 }
 
+extension KeroTerminalView: TerminalSurfaceHoverLinkDelegate {
+    func terminalDidUpdateHoverLink(_ url: String?) {
+        hoveredLink = url
+    }
+}
+
 extension KeroTerminalView: TerminalSurfaceScrollbarDelegate {
     func terminalDidUpdateScrollbar(_ scrollbar: TerminalScrollbar) {
         let position = TerminalScrollPosition(
