@@ -226,6 +226,7 @@ private struct SessionTabsView: View {
     @State private var overflow = StripOverflow()
     @State private var draggedTabID: UUID?
     @State private var tabFrames: [UUID: CGRect] = [:]
+    @State private var tabSizes: [UUID: CGSize] = [:]
     /// Tab currently showing the inline rename field, if any.
     @State private var renamingTabID: UUID?
 
@@ -287,10 +288,24 @@ private struct SessionTabsView: View {
                     proxy.scrollTo(id)
                 }
             }
+            // Selection is not the only thing that can hide the active tab.
+            // Keep it visible when the window/sidebar changes the viewport,
+            // tabs are inserted or reordered, or a live title/rename changes
+            // the width of content before it.
+            .onChange(of: maxStripWidth) {
+                scrollToSelectedTab(using: proxy)
+            }
+            .onChange(of: project.tabs.map(\.id)) {
+                scrollToSelectedTab(using: proxy)
+            }
+            .onChange(of: tabSizes) {
+                scrollToSelectedTab(using: proxy)
+            }
             .onAppear {
                 // Restored sessions may open with an off-screen active tab.
-                guard let id = project.selectedTabID else { return }
-                DispatchQueue.main.async { proxy.scrollTo(id) }
+                DispatchQueue.main.async {
+                    scrollToSelectedTab(using: proxy)
+                }
             }
             .mask {
                 HStack(spacing: 0) {
@@ -322,7 +337,21 @@ private struct SessionTabsView: View {
                 project.newSession()
             }
         }
-        .onPreferenceChange(TabFramePreferenceKey.self) { tabFrames = $0 }
+        .onPreferenceChange(TabFramePreferenceKey.self) { frames in
+            tabFrames = frames
+            let sizes = frames.mapValues(\.size)
+            if sizes != tabSizes {
+                tabSizes = sizes
+            }
+        }
+    }
+
+    /// `anchor: nil` moves only as far as needed and is a no-op when the
+    /// selected tab is already fully inside the strip.
+    private func scrollToSelectedTab(using proxy: ScrollViewProxy) {
+        guard let id = project.selectedTabID,
+              project.tabs.contains(where: { $0.id == id }) else { return }
+        proxy.scrollTo(id)
     }
 
     /// Reorders immediately as the pointer crosses another tab. This direct
