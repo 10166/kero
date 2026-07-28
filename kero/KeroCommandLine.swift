@@ -25,8 +25,8 @@ private enum Appearance: String {
 
     var title: String {
         switch self {
-        case .dark: return "Dark"
-        case .light: return "Light"
+        case .dark: return String(localized: "Dark")
+        case .light: return String(localized: "Light")
         }
     }
 
@@ -81,7 +81,7 @@ private final class AppConnection {
               !token.isEmpty
         else {
             throw CLIError.message(
-                "`kero` must be run inside a Kero terminal."
+                String(localized: "`kero` must be run inside a Kero terminal.")
             )
         }
         stateURL = URL(fileURLWithPath: statePath)
@@ -110,7 +110,7 @@ private final class AppConnection {
             let state = try JSONDecoder().decode(ThemeState.self, from: data)
             guard state.version == 1 else {
                 throw CLIError.message(
-                    "This kero CLI does not understand theme catalog version \(state.version)."
+                    String(localized: "This kero CLI does not understand theme catalog version \(state.version).")
                 )
             }
             return state
@@ -118,7 +118,7 @@ private final class AppConnection {
             throw error
         } catch {
             throw CLIError.message(
-                "Could not read Kero's theme catalog: \(error.localizedDescription)"
+                String(localized: "Could not read Kero's theme catalog: \(error.localizedDescription)")
             )
         }
     }
@@ -197,11 +197,11 @@ private final class ThemeBrowser {
     func run() throws -> (theme: String, appearance: Appearance)? {
         guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
             throw CLIError.message(
-                "`kero +themes` needs an interactive terminal. Use `kero +themes --list` to print theme names."
+                String(localized: "`kero +themes` needs an interactive terminal. Use `kero +themes --list` to print theme names.")
             )
         }
         guard !themes(for: appearance).isEmpty else {
-            throw CLIError.message("Kero did not provide any \(appearance.rawValue) themes.")
+            throw CLIError.message(String(localized: "Kero did not provide any \(appearance.title) themes."))
         }
 
         try enterTerminalUI()
@@ -336,13 +336,19 @@ private final class ThemeBrowser {
 
         var output = "\u{1B}[2J\u{1B}[H"
         output += "  \u{1B}[1mKero +themes\u{1B}[0m"
-        output += "  \u{1B}[2m\(appearance.title) palette · Tab switches appearance\u{1B}[0m\r\n"
-        output += "  \u{1B}[2mType to filter: \u{1B}[0m"
-        output += query.isEmpty ? "\u{1B}[2m(all themes)\u{1B}[0m" : query
+        output += "  \u{1B}[2m"
+            + String(localized: "\(appearance.title) palette · Tab switches appearance")
+            + "\u{1B}[0m\r\n"
+        output += "  \u{1B}[2m" + String(localized: "Type to filter:") + " \u{1B}[0m"
+        output += query.isEmpty
+            ? "\u{1B}[2m" + String(localized: "(all themes)") + "\u{1B}[0m"
+            : query
         output += "\r\n\r\n"
 
         if visible.isEmpty {
-            output += "  \u{1B}[2mNo themes match “\(query)”.\u{1B}[0m\r\n"
+            output += "  \u{1B}[2m"
+                + String(localized: "No themes match “\(query)”.")
+                + "\u{1B}[0m\r\n"
         } else {
             for (offset, theme) in visible.enumerated() {
                 let index = start + offset
@@ -361,13 +367,15 @@ private final class ThemeBrowser {
         if padding > 0 {
             output += String(repeating: "\r\n", count: padding)
         }
-        output += "\r\n  \u{1B}[2m↑↓ navigate · Return save · Esc cancel · Tab light/dark\u{1B}[0m"
+        output += "\r\n  \u{1B}[2m"
+            + String(localized: "↑↓ navigate · Return save · Esc cancel · Tab light/dark")
+            + "\u{1B}[0m"
         writeOutput(output)
     }
 
     private func enterTerminalUI() throws {
         guard initscr() != nil else {
-            throw CLIError.message("Could not initialize the interactive terminal.")
+            throw CLIError.message(String(localized: "Could not initialize the interactive terminal."))
         }
         cursesActiveAtExit = true
 
@@ -376,7 +384,7 @@ private final class ThemeBrowser {
               keypad(stdscr, true) == OK
         else {
             restoreTerminalAtExit()
-            throw CLIError.message("Could not enter interactive terminal mode.")
+            throw CLIError.message(String(localized: "Could not enter interactive terminal mode."))
         }
 
         // ncurses owns terminal modes, escape-sequence decoding, and alternate
@@ -510,7 +518,7 @@ private func writeOutput(_ string: String) {
 
 private func printHelp() {
     print(
-        """
+        String(localized: """
         Usage:
           kero
           kero <command> [arguments...]
@@ -524,7 +532,7 @@ private func printHelp() {
         +themes browses Kero's themes in the terminal. Moving through the list
         previews the theme across the whole app; Return saves it and Esc
         restores the previous theme.
-        """
+        """)
     )
 }
 
@@ -537,7 +545,7 @@ private func run() throws {
     if arguments.first != "+themes" {
         if let command = arguments.first, command.hasPrefix("+") {
             throw CLIError.message(
-                "Unknown Kero command “\(command)”. Run `kero +help`."
+                String(localized: "Unknown Kero command “\(command)”. Run `kero +help`.")
             )
         }
         let connection = try AppConnection()
@@ -551,12 +559,12 @@ private func run() throws {
         switch argument {
         case "--dark":
             guard requestedAppearance != .light else {
-                throw CLIError.message("Choose only one of --dark and --light.")
+                throw CLIError.message(String(localized: "Choose only one of --dark and --light."))
             }
             requestedAppearance = .dark
         case "--light":
             guard requestedAppearance != .dark else {
-                throw CLIError.message("Choose only one of --dark and --light.")
+                throw CLIError.message(String(localized: "Choose only one of --dark and --light."))
             }
             requestedAppearance = .light
         case "--list":
@@ -566,7 +574,7 @@ private func run() throws {
             return
         default:
             throw CLIError.message(
-                "Unknown option “\(argument)”. Run `kero +themes --help`."
+                String(localized: "Unknown option “\(argument)”. Run `kero +themes --help`.")
             )
         }
     }
@@ -590,7 +598,7 @@ private func run() throws {
         initialAppearance: requestedAppearance
     )
     if let saved = try browser.run() {
-        print("Saved \(saved.theme) as Kero's \(saved.appearance.rawValue) theme.")
+        print(String(localized: "Saved \(saved.theme) as Kero's \(saved.appearance.title) theme."))
     }
 }
 

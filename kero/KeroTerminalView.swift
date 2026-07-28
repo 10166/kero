@@ -176,10 +176,10 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
 
     private func contextMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(contextItem("Copy", #selector(copy(_:))))
-        menu.addItem(contextItem("Paste", #selector(NSText.paste(_:))))
+        menu.addItem(contextItem(String(localized: "Copy"), #selector(copy(_:))))
+        menu.addItem(contextItem(String(localized: "Paste"), #selector(NSText.paste(_:))))
         menu.addItem(.separator())
-        menu.addItem(contextItem("Select All", #selector(selectAll(_:))))
+        menu.addItem(contextItem(String(localized: "Select All"), #selector(selectAll(_:))))
         menu.addItem(.separator())
         for item in splitTarget.menuItems() { menu.addItem(item) }
         return menu
@@ -406,10 +406,10 @@ final class SplitMenuTarget: NSObject {
 
     func menuItems() -> [NSMenuItem] {
         [
-            item("Split Right", #selector(splitRight)),
-            item("Split Left", #selector(splitLeft)),
-            item("Split Up", #selector(splitUp)),
-            item("Split Down", #selector(splitDown)),
+            item(String(localized: "Split Right"), #selector(splitRight)),
+            item(String(localized: "Split Left"), #selector(splitLeft)),
+            item(String(localized: "Split Up"), #selector(splitUp)),
+            item(String(localized: "Split Down"), #selector(splitDown)),
         ]
     }
 

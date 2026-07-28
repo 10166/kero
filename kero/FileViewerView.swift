@@ -181,7 +181,7 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
         let url = URL(fileURLWithPath: path)
         guard let data else {
             return LoadedContent(
-                content: .unavailable("Could not read file"),
+                content: .unavailable(String(localized: "Could not read file")),
                 text: "",
                 imageFingerprint: nil
             )
@@ -196,14 +196,14 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
         }
         guard data.count <= maxTextBytes else {
             return LoadedContent(
-                content: .unavailable("File is too large to open"),
+                content: .unavailable(String(localized: "File is too large to open")),
                 text: "",
                 imageFingerprint: nil
             )
         }
         guard let string = String(data: data, encoding: .utf8) else {
             return LoadedContent(
-                content: .unavailable("Binary file"),
+                content: .unavailable(String(localized: "Binary file")),
                 text: "",
                 imageFingerprint: nil
             )

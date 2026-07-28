@@ -134,7 +134,9 @@ struct ContentView: View {
     }
 
     private func emptyStatePrompt(
-        title: String, buttonTitle: String, action: @escaping () -> Void
+        title: LocalizedStringKey,
+        buttonTitle: LocalizedStringKey,
+        action: @escaping () -> Void
     ) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "terminal")
@@ -550,7 +552,7 @@ private struct TabItemChrome: View {
                 Image(systemName: systemImage)
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(isSelected ? AnyShapeStyle(Color(nsColor: Theme.accent)) : AnyShapeStyle(.tertiary))
-                Text(title)
+                Text(verbatim: title)
                     .font(.system(size: 11.5))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .lineLimit(1)
@@ -558,7 +560,7 @@ private struct TabItemChrome: View {
                     HStack(spacing: 2) {
                         Image(systemName: "square.split.2x1")
                             .font(.system(size: 7.5, weight: .semibold))
-                        Text("\(paneCount)")
+                        Text(verbatim: "\(paneCount)")
                             .font(.system(size: 9, weight: .semibold))
                     }
                     .foregroundStyle(.tertiary)

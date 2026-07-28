@@ -1455,10 +1455,10 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
 
     private func contextMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(contextItem("Copy", #selector(copy(_:))))
-        menu.addItem(contextItem("Paste", #selector(paste(_:))))
+        menu.addItem(contextItem(String(localized: "Copy"), #selector(copy(_:))))
+        menu.addItem(contextItem(String(localized: "Paste"), #selector(paste(_:))))
         menu.addItem(.separator())
-        menu.addItem(contextItem("Select All", #selector(selectAll(_:))))
+        menu.addItem(contextItem(String(localized: "Select All"), #selector(selectAll(_:))))
         menu.addItem(.separator())
         for item in splitTarget.menuItems() { menu.addItem(item) }
         return menu

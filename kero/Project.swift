@@ -398,13 +398,16 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     private func confirmCloseUnsaved(_ file: FileTab, in window: NSWindow?) async -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Do you want to save the changes you made to \(file.name)?"
-        alert.informativeText = "Your changes will be lost if you don't save them."
-        alert.addButton(withTitle: "Save")
-        let dontSave = alert.addButton(withTitle: "Don't Save")
+        alert.messageText = String(
+            localized: "Do you want to save the changes you made to \(file.name)?",
+            comment: "Unsaved file confirmation. The placeholder is a file name."
+        )
+        alert.informativeText = String(localized: "Your changes will be lost if you don't save them.")
+        alert.addButton(withTitle: String(localized: "Save"))
+        let dontSave = alert.addButton(withTitle: String(localized: "Don’t Save"))
         dontSave.keyEquivalent = "d"
         dontSave.keyEquivalentModifierMask = .command
-        let cancel = alert.addButton(withTitle: "Cancel")
+        let cancel = alert.addButton(withTitle: String(localized: "Cancel"))
         cancel.keyEquivalent = "\u{1b}"
 
         let response: NSApplication.ModalResponse

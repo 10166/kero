@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- Add native English, Simplified Chinese, and Japanese localization throughout the app, with a language picker in Settings
+
 ## [0.1.31]
 
 - File previews now refresh after files are changed outside Kero

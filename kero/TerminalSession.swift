@@ -407,7 +407,7 @@ extension TerminalSession: TerminalBackendEvents {
     func terminalDidRingBell() {
         NSSound.beep()
         guard !surface.hasEffectiveTerminalFocus else { return }
-        TerminalNotificationService.shared.post(message: "Terminal bell")
+        TerminalNotificationService.shared.post(message: String(localized: "Terminal bell"))
         if !NSApp.isActive {
             NSApp.requestUserAttention(.informationalRequest)
         }
@@ -490,18 +490,22 @@ extension TerminalSession: TerminalBackendEvents {
         alert.alertStyle = .warning
         switch request.kind {
         case .unsafePaste:
-            alert.messageText = "Warning: Potentially Unsafe Paste"
+            alert.messageText = String(localized: "Warning: Potentially Unsafe Paste")
             alert.informativeText =
-                "Pasting this text to the terminal may be dangerous as it looks like some commands may be executed."
+                String(localized: "Pasting this text to the terminal may be dangerous because it looks like one or more commands may execute.")
         case .programRead:
-            alert.messageText = "Authorize Clipboard Access"
+            alert.messageText = String(localized: "Authorize Clipboard Access")
             alert.informativeText =
-                "A program is attempting to read from the clipboard. The current clipboard contents are shown below."
+                String(localized: "A program is attempting to read from the clipboard. The current clipboard contents are shown below.")
         }
         alert.accessoryView = Self.clipboardPreview(request.contents)
-        alert.addButton(withTitle: request.kind == .unsafePaste ? "Paste" : "Allow")
+        alert.addButton(withTitle: request.kind == .unsafePaste
+            ? String(localized: "Paste")
+            : String(localized: "Allow"))
         let cancel = alert.addButton(
-            withTitle: request.kind == .unsafePaste ? "Cancel" : "Deny"
+            withTitle: request.kind == .unsafePaste
+                ? String(localized: "Cancel")
+                : String(localized: "Deny")
         )
         cancel.keyEquivalent = "\u{1b}"
 

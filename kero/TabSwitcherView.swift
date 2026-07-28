@@ -494,7 +494,7 @@ private struct TabSwitcherCard: View {
                 Image(systemName: tab.focusedContent?.systemImage ?? "rectangle")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary.opacity(isHighlighted ? 1 : 0.82))
-                Text(tab.displayTitle ?? "Tab \(index + 1)")
+                Text(verbatim: tab.displayTitle ?? String(localized: "Tab \(index + 1)"))
                     .font(.system(
                         size: 14,
                         weight: .medium
@@ -536,7 +536,12 @@ private struct TabSwitcherCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Tab \(index + 1), \(tab.displayTitle ?? "Untitled")")
+        .accessibilityLabel(
+            String(
+                localized: "Tab \(index + 1), \(tab.displayTitle ?? String(localized: "Untitled"))",
+                comment: "Accessibility label for a tab. The placeholders are its position and title."
+            )
+        )
         .accessibilityValue(isHighlighted ? "Selected on release" : "")
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])

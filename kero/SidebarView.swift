@@ -146,7 +146,7 @@ struct SidebarView: View {
 
 struct ChromeIconButton: View {
     let systemImage: String
-    let tooltip: String
+    let tooltip: LocalizedStringKey
     var font: Font = .system(size: 12, weight: .medium)
     var iconSize: CGFloat = 16
     var tooltipEdge: TooltipEdge = .below
@@ -176,7 +176,7 @@ struct ChromeIconButton: View {
 
 private struct SidebarFooterButton: View {
     let systemImage: String
-    let tooltip: String
+    let tooltip: LocalizedStringKey
     /// Buttons near the sidebar's right edge anchor `.trailing` so the label
     /// grows inward instead of off-panel.
     var tooltipAlignment: HorizontalAlignment = .leading
@@ -272,8 +272,11 @@ private struct SidebarProjectRow: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-        panel.message = "Choose the directory for “\(project.name)”."
+        panel.prompt = String(localized: "Choose", comment: "Button in the project directory picker.")
+        panel.message = String(
+            localized: "Choose the directory for “\(project.name)”.",
+            comment: "Message in the project directory picker. The placeholder is a project name."
+        )
         if let current = project.customDirectory
             ?? project.selectedSession?.currentDirectoryPath {
             panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true)
@@ -329,7 +332,7 @@ private struct SidebarProjectRow: View {
                 }
                 .buttonStyle(.plain)
             } else if index < 9, !isRenaming {
-                Text("⌘\(index + 1)")
+                Text(verbatim: "⌘\(index + 1)")
                     .font(.system(size: supportingFontSize))
                     .foregroundStyle(.tertiary)
             }

@@ -11,6 +11,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var updater = Updater.shared
+    @State private var relaunchError = ""
+    @State private var isShowingRelaunchError = false
 
     /// Installed fixed-pitch families (bundled default first).
     private let families = TerminalFont.selectableFamilies()
@@ -29,6 +31,24 @@ struct SettingsView: View {
                     Text("Theme")
                     Spacer()
                     ThemePicker(selection: $settings.theme)
+                }
+
+                Picker("Language", selection: $settings.language) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(verbatim: language.title).tag(language)
+                    }
+                }
+
+                if settings.languageRequiresRelaunch {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Relaunch Kero to apply the language change.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Relaunch Kero") {
+                            relaunch()
+                        }
+                    }
                 }
             }
 
@@ -105,9 +125,9 @@ struct SettingsView: View {
             Section("Preview") {
                 // Exercises regular/bold plus Nerd Font icon fallback.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("kero ❯ echo \"the quick brown fox\" 0O 1lI")
-                    Text("\u{E0A0} main \u{E0B0} ~/dev/kero \u{E711} \u{F024B} \u{F0A7D}")
-                    Text("bold — permission denied (os error 13)")
+                    Text(verbatim: "kero ❯ echo \"the quick brown fox\" 0O 1lI")
+                    Text(verbatim: "\u{E0A0} main \u{E0B0} ~/dev/kero \u{E711} \u{F024B} \u{F0A7D}")
+                    Text(verbatim: "bold — permission denied (os error 13)")
                         .bold()
                 }
                 .font(Font(previewFont))
@@ -180,6 +200,7 @@ struct SettingsView: View {
                         && settings.sidebarFontSize == AppSettings.defaultSidebarFontSize
                         && !settings.fontThicken
                         && !settings.macosOptionAsAlt
+                        && settings.language == .system
                         && settings.theme == .system
                         && settings.themeDark == Theme.defaultDarkThemeName
                         && settings.themeLight == Theme.defaultLightThemeName
@@ -191,10 +212,39 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 440)
+        .alert(
+            "Couldn’t Relaunch Kero",
+            isPresented: $isShowingRelaunchError
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(verbatim: relaunchError)
+        }
     }
 
     private var previewFont: NSFont {
         TerminalFont.resolve(family: settings.fontFamily, size: CGFloat(settings.fontSize))
+    }
+
+    private func relaunch() {
+        TerminalManager.saveForRelaunch()
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(
+            at: Bundle.main.bundleURL,
+            configuration: configuration
+        ) { _, error in
+            DispatchQueue.main.async {
+                if let error {
+                    relaunchError = error.localizedDescription
+                    isShowingRelaunchError = true
+                } else {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
     }
 
     /// The compact catalog of popular themes shared by both terminal backends,
@@ -353,6 +403,9 @@ private struct TerminalBackendHighlightRow: View {
     let highlight: TerminalBackendHighlight
 
     var body: some View {
+        let availability = highlight.isPositive
+            ? String(localized: "Available", comment: "Accessibility description for a supported terminal feature.")
+            : String(localized: "Unavailable", comment: "Accessibility description for an unsupported terminal feature.")
         HStack(spacing: 4) {
             Image(systemName: highlight.isPositive
                 ? "checkmark.circle.fill"
@@ -365,7 +418,10 @@ private struct TerminalBackendHighlightRow: View {
         .font(.caption)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "\(highlight.isPositive ? "Available" : "Unavailable"): \(highlight.title)"
+            String(
+                localized: "\(availability): \(highlight.title)",
+                comment: "Accessibility label for a terminal feature and whether it is available."
+            )
         )
     }
 }

@@ -12,8 +12,8 @@ enum PaletteSection: Hashable {
 
     var title: String {
         switch self {
-        case .command: return "Commands"
-        case .session: return "Sessions"
+        case .command: return String(localized: "Commands", comment: "Command palette section title.")
+        case .session: return String(localized: "Sessions", comment: "Command palette section title.")
         }
     }
 
@@ -40,6 +40,48 @@ struct PaletteCommand: Identifiable {
     /// sessions to also cover the project name and directory.
     var searchText: String? = nil
     let action: () -> Void
+
+    /// Built-in command copy is a localized resource. Runtime content such as
+    /// shell-provided session titles uses the explicitly verbatim initializer.
+    init(
+        id: String,
+        title: LocalizedStringResource,
+        systemImage: String,
+        subtitle: String? = nil,
+        shortcut: String? = nil,
+        section: PaletteSection = .command,
+        searchText: String? = nil,
+        action: @escaping () -> Void
+    ) {
+        self.id = id
+        self.title = String(localized: title)
+        self.systemImage = systemImage
+        self.subtitle = subtitle
+        self.shortcut = shortcut
+        self.section = section
+        self.searchText = searchText
+        self.action = action
+    }
+
+    init(
+        id: String,
+        verbatimTitle: String,
+        systemImage: String,
+        subtitle: String? = nil,
+        shortcut: String? = nil,
+        section: PaletteSection = .command,
+        searchText: String? = nil,
+        action: @escaping () -> Void
+    ) {
+        self.id = id
+        self.title = verbatimTitle
+        self.systemImage = systemImage
+        self.subtitle = subtitle
+        self.shortcut = shortcut
+        self.section = section
+        self.searchText = searchText
+        self.action = action
+    }
 }
 
 /// Centered ⌘P overlay: fuzzy-searchable list of app actions. Arrow keys
@@ -208,7 +250,7 @@ struct CommandPaletteView: View {
                     .joined(separator: " ")
                 return PaletteCommand(
                     id: "session-\(session.id)",
-                    title: session.title,
+                    verbatimTitle: session.title,
                     systemImage: "terminal",
                     subtitle: directory,
                     section: .session,

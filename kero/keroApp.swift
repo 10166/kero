@@ -343,7 +343,7 @@ private struct KeroCommands: Commands {
             Divider()
 
             ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()), id: \.element.id) { index, tab in
-                Button(tab.displayTitle ?? "Tab \(index + 1)") {
+                Button(tab.displayTitle ?? String(localized: "Tab \(index + 1)")) {
                     manager?.selectTab(index: index)
                 }
                 .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.control, .shift])

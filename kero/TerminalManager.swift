@@ -626,6 +626,12 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
+    /// Flushes the complete multi-window snapshot before Settings starts a
+    /// replacement app instance for a language change.
+    static func saveForRelaunch() {
+        saveAll(captureTerminalHistory: true)
+    }
+
     /// After the first window appears, reopen one window per unclaimed
     /// saved snapshot; each new window's manager claims the next one.
     /// Deferred a runloop tick so windows the system itself restores can
