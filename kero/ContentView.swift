@@ -447,6 +447,7 @@ private struct PaneTabItem: View {
         if renamingTabID == tab.id {
             TabRenameChrome(
                 systemImage: tab.focusedContent?.systemImage ?? "terminal",
+                browserIcon: focusedBrowser,
                 initialValue: tab.displayTitle ?? "",
                 commit: { name in
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -477,6 +478,14 @@ private struct PaneTabItem: View {
             }
         }
     }
+
+    private var focusedBrowser: BrowserTab? {
+        if case .browser(let browser) = tab.focusedContent {
+            browser
+        } else {
+            nil
+        }
+    }
 }
 
 /// Inline editor shown in place of a tab while it's renamed — the same
@@ -485,6 +494,7 @@ private struct PaneTabItem: View {
 private struct TabRenameChrome: View {
     @ObservedObject private var themeChanges = Theme.changes
     let systemImage: String
+    let browserIcon: BrowserTab?
     let commit: (String) -> Void
     let end: () -> Void
 
@@ -496,11 +506,13 @@ private struct TabRenameChrome: View {
 
     init(
         systemImage: String,
+        browserIcon: BrowserTab?,
         initialValue: String,
         commit: @escaping (String) -> Void,
         end: @escaping () -> Void
     ) {
         self.systemImage = systemImage
+        self.browserIcon = browserIcon
         self.commit = commit
         self.end = end
         _draft = State(initialValue: initialValue)
@@ -508,9 +520,15 @@ private struct TabRenameChrome: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: systemImage)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Color(nsColor: Theme.accent))
+            if let browserIcon {
+                BrowserFaviconView(browser: browserIcon, size: 11)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color(nsColor: Theme.accent))
+            } else {
+                Image(systemName: systemImage)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color(nsColor: Theme.accent))
+            }
             TextField("", text: $draft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11.5))
@@ -598,6 +616,7 @@ private struct BrowserTabLabel: View {
     var body: some View {
         TabItemChrome(
             systemImage: "globe",
+            browserIcon: browser,
             title: customTitle ?? browser.title,
             paneCount: paneCount,
             isSelected: isSelected,
@@ -611,6 +630,7 @@ private struct BrowserTabLabel: View {
 private struct TabItemChrome: View {
     @ObservedObject private var themeChanges = Theme.changes
     let systemImage: String
+    var browserIcon: BrowserTab? = nil
     let title: String
     var paneCount: Int = 1
     let isSelected: Bool
@@ -623,9 +643,24 @@ private struct TabItemChrome: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: 5) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(isSelected ? AnyShapeStyle(Color(nsColor: Theme.accent)) : AnyShapeStyle(.tertiary))
+                if let browserIcon {
+                    BrowserFaviconView(browser: browserIcon, size: 11)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(
+                            isSelected
+                                ? AnyShapeStyle(Color(nsColor: Theme.accent))
+                                : AnyShapeStyle(.tertiary)
+                        )
+                        .opacity(isSelected ? 1 : 0.78)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(
+                            isSelected
+                                ? AnyShapeStyle(Color(nsColor: Theme.accent))
+                                : AnyShapeStyle(.tertiary)
+                        )
+                }
                 Text(verbatim: title)
                     .font(.system(size: 11.5))
                     .foregroundStyle(isSelected ? .primary : .secondary)

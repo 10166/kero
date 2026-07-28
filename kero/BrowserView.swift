@@ -5,14 +5,65 @@
 
 import AppKit
 import Combine
+import ImageIO
 import SwiftUI
 import WebKit
+
+private enum BrowserContextMenuSupport {
+    static let messageName = "keroContextMenuLink"
+    static let script = #"""
+    (() => {
+      window.addEventListener("contextmenu", event => {
+        let element = event.target;
+        if (element?.nodeType === Node.TEXT_NODE) {
+          element = element.parentElement;
+        }
+        const link = element?.closest?.("a[href], area[href]");
+        window.webkit.messageHandlers.keroContextMenuLink.postMessage(
+          link?.href || ""
+        );
+      }, true);
+    })()
+    """#
+}
+
+private final class BrowserContextMenuBridge: NSObject, WKScriptMessageHandler {
+    weak var webView: BrowserWebView?
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        webView?.contextMenuLink = message.body as? String
+    }
+}
 
 /// WKWebView subclass that reports page interaction back to the pane layout.
 /// WebKit's actual first responder is a private descendant view, so observing
 /// the outer SwiftUI host is not enough to keep pane focus in sync.
 final class BrowserWebView: WKWebView {
     var onFocused: (() -> Void)?
+    var onNewBrowserTab: ((String?) -> Void)?
+    var onNewBrowserPane: ((String?) -> Void)?
+    fileprivate var contextMenuLink: String? {
+        didSet {
+            guard let contextMenuLink,
+                  let url = URL(string: contextMenuLink),
+                  let scheme = url.scheme?.lowercased(),
+                  ["http", "https", "file"].contains(scheme)
+            else {
+                contextMenuLinkURL = nil
+                return
+            }
+            contextMenuLinkURL = url
+        }
+    }
+
+    private var contextMenuLinkURL: URL?
+    private static let openLinkInNewTabIdentifier =
+        NSUserInterfaceItemIdentifier("kero.browser.openLinkInNewTab")
+    private static let openLinkInNewPaneIdentifier =
+        NSUserInterfaceItemIdentifier("kero.browser.openLinkInNewPane")
 
     override func mouseDown(with event: NSEvent) {
         onFocused?()
@@ -20,8 +71,76 @@ final class BrowserWebView: WKWebView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        contextMenuLink = nil
         onFocused?()
         super.rightMouseDown(with: event)
+    }
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        guard let linkURL = contextMenuLinkURL else { return }
+
+        removeDefaultOpenInNewWindow(from: menu)
+        guard menu.items.contains(where: {
+            $0.identifier == Self.openLinkInNewTabIdentifier
+        }) == false else { return }
+
+        let tabItem = linkMenuItem(
+            String(localized: "Open Link in New Tab"),
+            identifier: Self.openLinkInNewTabIdentifier,
+            action: #selector(openLinkInNewTab(_:)),
+            linkURL: linkURL
+        )
+        let paneItem = linkMenuItem(
+            String(localized: "Open Link in New Pane"),
+            identifier: Self.openLinkInNewPaneIdentifier,
+            action: #selector(openLinkInNewPane(_:)),
+            linkURL: linkURL
+        )
+
+        let insertionIndex = min(1, menu.items.count)
+        menu.insertItem(tabItem, at: insertionIndex)
+        menu.insertItem(paneItem, at: insertionIndex + 1)
+        let separatorIndex = insertionIndex + 2
+        if separatorIndex < menu.items.count,
+           !menu.items[separatorIndex].isSeparatorItem {
+            menu.insertItem(.separator(), at: separatorIndex)
+        }
+    }
+
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        contextMenuLink = nil
+    }
+
+    private func removeDefaultOpenInNewWindow(from menu: NSMenu) {
+        let localizedTitle = String(localized: "Open Link in New Window")
+        if let item = menu.items.first(where: {
+            $0.title == localizedTitle || ($0.tag == 1 && $0.action != nil)
+        }) {
+            menu.removeItem(item)
+        }
+    }
+
+    private func linkMenuItem(
+        _ title: String,
+        identifier: NSUserInterfaceItemIdentifier,
+        action: Selector,
+        linkURL: URL
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.identifier = identifier
+        item.target = self
+        item.representedObject = linkURL.absoluteString
+        return item
+    }
+
+    @objc private func openLinkInNewTab(_ sender: NSMenuItem) {
+        onNewBrowserTab?(sender.representedObject as? String)
+    }
+
+    @objc private func openLinkInNewPane(_ sender: NSMenuItem) {
+        onNewBrowserPane?(sender.representedObject as? String)
     }
 }
 
@@ -39,6 +158,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published private(set) var isLoading = false
     @Published private(set) var estimatedProgress = 0.0
     @Published private(set) var errorMessage: String?
+    @Published private(set) var favicon: NSImage?
     /// Incremented by the app-level Focus Address Bar command. A sequence is
     /// used instead of a Bool so repeated ⌘L presses are never coalesced.
     @Published private(set) var focusAddressRequest: UInt = 0
@@ -48,17 +168,64 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private var pageTitle: String?
     private var observations: Set<AnyCancellable> = []
     private var focusesAddressBarOnFirstAppearance: Bool
+    private let contextMenuBridge: BrowserContextMenuBridge
+    private var faviconTask: Task<Void, Never>?
+    private var faviconRevision: UInt = 0
+
+    private static let maximumFaviconBytes = 2 * 1_024 * 1_024
+    private static let faviconCache: NSCache<NSURL, NSImage> = {
+        let cache = NSCache<NSURL, NSImage>()
+        cache.countLimit = 128
+        return cache
+    }()
+    private static let faviconCandidatesScript = #"""
+    (() => {
+      const score = link => {
+        const sizes = Array.from(link.sizes || []);
+        if (link.type === "image/svg+xml" || sizes.includes("any")) return 10000;
+        return sizes.reduce((best, size) => {
+          const match = size.match(/^(\d+)x(\d+)$/);
+          return match
+            ? Math.max(best, Math.min(Number(match[1]), Number(match[2])))
+            : best;
+        }, 0);
+      };
+      return Array.from(document.querySelectorAll("link[rel][href]"))
+        .filter(link => {
+          const rel = link.rel.toLowerCase();
+          return rel.split(/\s+/).includes("icon")
+            || rel.includes("apple-touch-icon");
+        })
+        .sort((a, b) => score(b) - score(a))
+        .map(link => link.href);
+    })()
+    """#
 
     init(initialURL: String? = nil, focusesAddressBar: Bool = true) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.isElementFullscreenEnabled = true
+        let contextMenuBridge = BrowserContextMenuBridge()
+        let contextWorld = WKContentWorld.defaultClient
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: BrowserContextMenuSupport.script,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: contextWorld
+        ))
+        configuration.userContentController.add(
+            contextMenuBridge,
+            contentWorld: contextWorld,
+            name: BrowserContextMenuSupport.messageName
+        )
 
+        self.contextMenuBridge = contextMenuBridge
         webView = BrowserWebView(frame: .zero, configuration: configuration)
         focusesAddressBarOnFirstAppearance = focusesAddressBar
         super.init()
 
+        contextMenuBridge.webView = webView
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -68,6 +235,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if let initialURL, !initialURL.isEmpty {
             navigate(to: initialURL)
         }
+    }
+
+    deinit {
+        faviconTask?.cancel()
     }
 
     var snapshotURL: String? {
@@ -162,7 +333,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             .store(in: &observations)
 
         webView.publisher(for: \.isLoading, options: [.initial, .new])
-            .sink { [weak self] in self?.isLoading = $0 }
+            .sink { [weak self] isLoading in
+                guard let self else { return }
+                let startedLoading = isLoading && !self.isLoading
+                self.isLoading = isLoading
+                if startedLoading {
+                    self.prepareForFaviconNavigation()
+                } else if !isLoading, self.webView.url != nil {
+                    self.loadFavicon()
+                }
+            }
             .store(in: &observations)
 
         webView.publisher(for: \.estimatedProgress, options: [.initial, .new])
@@ -262,8 +442,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     // MARK: - WKNavigationDelegate
 
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+    private func prepareForFaviconNavigation() {
         errorMessage = nil
+        faviconRevision &+= 1
+        faviconTask?.cancel()
+        faviconTask = nil
+        favicon = nil
     }
 
     func webView(
@@ -310,6 +494,128 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         let nsError = error as NSError
         guard nsError.code != NSURLErrorCancelled else { return }
         errorMessage = nsError.localizedDescription
+    }
+
+    private func loadFavicon() {
+        faviconTask?.cancel()
+        let revision = faviconRevision
+        faviconTask = Task { @MainActor [weak self] in
+            guard let webView = self?.webView,
+                  let pageURL = webView.url
+            else { return }
+
+            let result = try? await webView.evaluateJavaScript(
+                Self.faviconCandidatesScript
+            )
+            let declared = result as? [String] ?? []
+            var candidates = declared.compactMap {
+                URL(string: $0, relativeTo: pageURL)?.absoluteURL
+            }
+            if let conventional = URL(
+                string: "/favicon.ico",
+                relativeTo: pageURL
+            )?.absoluteURL {
+                candidates.append(conventional)
+            }
+
+            var seen = Set<String>()
+            for candidate in candidates where seen.insert(candidate.absoluteString).inserted {
+                guard !Task.isCancelled else { return }
+
+                if candidate.scheme?.lowercased() != "data",
+                   let cached = Self.faviconCache.object(
+                       forKey: candidate as NSURL
+                   ) {
+                    guard let self, self.faviconRevision == revision else { return }
+                    self.favicon = cached
+                    return
+                }
+
+                guard let data = await Self.faviconData(from: candidate),
+                      !Task.isCancelled,
+                      let image = Self.faviconImage(from: data)
+                else { continue }
+
+                if candidate.scheme?.lowercased() != "data" {
+                    Self.faviconCache.setObject(
+                        image,
+                        forKey: candidate as NSURL,
+                        cost: data.count
+                    )
+                }
+                guard let self, self.faviconRevision == revision else { return }
+                self.favicon = image
+                return
+            }
+        }
+    }
+
+    private static func faviconData(from url: URL) async -> Data? {
+        switch url.scheme?.lowercased() {
+        case "data":
+            return faviconData(fromDataURL: url)
+        case "http", "https":
+            var request = URLRequest(
+                url: url,
+                cachePolicy: .returnCacheDataElseLoad,
+                timeoutInterval: 10
+            )
+            request.setValue(
+                "image/avif,image/webp,image/svg+xml,image/*,*/*;q=0.8",
+                forHTTPHeaderField: "Accept"
+            )
+            guard let (data, response) = try? await URLSession.shared.data(
+                for: request
+            ),
+            let response = response as? HTTPURLResponse,
+            (200..<300).contains(response.statusCode),
+            data.count <= maximumFaviconBytes
+            else { return nil }
+            return data
+        default:
+            return nil
+        }
+    }
+
+    private static func faviconData(fromDataURL url: URL) -> Data? {
+        let value = url.absoluteString
+        guard let comma = value.firstIndex(of: ",") else { return nil }
+        let metadata = value[..<comma].lowercased()
+        let payload = String(value[value.index(after: comma)...])
+        let data: Data?
+        if metadata.hasSuffix(";base64") {
+            data = Data(base64Encoded: payload, options: .ignoreUnknownCharacters)
+        } else {
+            data = payload.removingPercentEncoding?.data(using: .utf8)
+        }
+        guard let data, data.count <= maximumFaviconBytes else { return nil }
+        return data
+    }
+
+    /// Decode remote artwork into one bounded bitmap before publishing it.
+    /// A page-controlled SVG or unusually large raster should never make a
+    /// tiny tab icon allocate at its source dimensions.
+    private static func faviconImage(from data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) > 0
+        else { return nil }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 64,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(
+            source,
+            0,
+            options as CFDictionary
+        ) else { return nil }
+        let favicon = NSImage(
+            cgImage: image,
+            size: NSSize(width: image.width, height: image.height)
+        )
+        favicon.isTemplate = false
+        return favicon
     }
 
     // MARK: - WKUIDelegate
@@ -391,11 +697,40 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 }
 
+/// A browser identity icon that observes favicon arrival independently of the
+/// pane/tab container rendering it.
+struct BrowserFaviconView: View {
+    @ObservedObject var browser: BrowserTab
+    let size: CGFloat
+    var fallbackSystemImage = "globe"
+
+    @ViewBuilder
+    var body: some View {
+        if let favicon = browser.favicon {
+            Image(nsImage: favicon)
+                .renderingMode(.original)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(
+                    cornerRadius: max(1.5, size * 0.18),
+                    style: .continuous
+                ))
+        } else {
+            Image(systemName: fallbackSystemImage)
+                .frame(width: size, height: size)
+        }
+    }
+}
+
 /// Browser content and native navigation chrome. The toolbar stays in SwiftUI
 /// so it follows Kero's appearance while the page remains a real WKWebView.
 struct BrowserView: View {
     @ObservedObject var browser: BrowserTab
     let onFocused: () -> Void
+    let onNewBrowserTab: (String?) -> Void
+    let onNewBrowserPane: (String?) -> Void
 
     @ObservedObject private var themeChanges = Theme.changes
     @State private var address = ""
@@ -406,7 +741,12 @@ struct BrowserView: View {
         VStack(spacing: 0) {
             toolbar
             ZStack {
-                BrowserWebViewRepresentable(browser: browser, onFocused: onFocused)
+                BrowserWebViewRepresentable(
+                    browser: browser,
+                    onFocused: onFocused,
+                    onNewBrowserTab: onNewBrowserTab,
+                    onNewBrowserPane: onNewBrowserPane
+                )
 
                 if browser.isBlank {
                     Color(nsColor: Theme.background)
@@ -477,14 +817,14 @@ struct BrowserView: View {
             HStack(spacing: 2) {
                 if let url = browser.shareURL {
                     ShareLink(item: url) {
-                        toolbarIcon("square.and.arrow.up")
+                        toolbarIcon("square.and.arrow.up", opticalYOffset: -1)
                     }
                     .buttonStyle(.plain)
                     .simultaneousGesture(TapGesture().onEnded(onFocused))
                     .help(String(localized: "Share"))
                     .accessibilityLabel(String(localized: "Share"))
                 } else {
-                    toolbarIcon("square.and.arrow.up")
+                    toolbarIcon("square.and.arrow.up", opticalYOffset: -1)
                         .foregroundStyle(.quaternary)
                         .accessibilityHidden(true)
                 }
@@ -597,9 +937,13 @@ struct BrowserView: View {
         .accessibilityLabel(help)
     }
 
-    private func toolbarIcon(_ systemImage: String) -> some View {
+    private func toolbarIcon(
+        _ systemImage: String,
+        opticalYOffset: CGFloat = 0
+    ) -> some View {
         Image(systemName: systemImage)
             .font(.system(size: 12, weight: .medium))
+            .offset(y: opticalYOffset)
             .frame(width: 28, height: 28)
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
@@ -769,17 +1113,25 @@ private struct BrowserAddressField: NSViewRepresentable {
 private struct BrowserWebViewRepresentable: NSViewRepresentable {
     @ObservedObject var browser: BrowserTab
     let onFocused: () -> Void
+    let onNewBrowserTab: (String?) -> Void
+    let onNewBrowserPane: (String?) -> Void
 
     func makeNSView(context: Context) -> BrowserWebView {
         browser.webView.onFocused = onFocused
+        browser.webView.onNewBrowserTab = onNewBrowserTab
+        browser.webView.onNewBrowserPane = onNewBrowserPane
         return browser.webView
     }
 
     func updateNSView(_ webView: BrowserWebView, context: Context) {
         webView.onFocused = onFocused
+        webView.onNewBrowserTab = onNewBrowserTab
+        webView.onNewBrowserPane = onNewBrowserPane
     }
 
     static func dismantleNSView(_ webView: BrowserWebView, coordinator: ()) {
         webView.onFocused = nil
+        webView.onNewBrowserTab = nil
+        webView.onNewBrowserPane = nil
     }
 }

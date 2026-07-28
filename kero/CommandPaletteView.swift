@@ -174,7 +174,7 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "new-browser-tab", title: "New Browser Tab", systemImage: "globe") {
                 manager.newBrowserTab()
             },
-            PaletteCommand(id: "new-browser-pane", title: "New Browser Pane", systemImage: "rectangle.split.2x1") {
+            PaletteCommand(id: "new-browser-pane", title: "New Browser Pane", systemImage: "globe") {
                 manager.newBrowserPane()
             },
             PaletteCommand(id: "clear-terminal", title: "Clear Terminal", systemImage: "eraser", shortcut: "⌘K") {

@@ -516,7 +516,12 @@ private struct PaneView: View {
             )
                 .background(Color(nsColor: Theme.background))
         case .browser(let browser):
-            BrowserView(browser: browser, onFocused: focus)
+            BrowserView(
+                browser: browser,
+                onFocused: focus,
+                onNewBrowserTab: newBrowserTabFromMenu,
+                onNewBrowserPane: newBrowserPaneFromMenu
+            )
                 .background(Color(nsColor: Theme.background))
         case .diff:
             // Rendered by the always-mounted diff stack behind the layout; stay

@@ -4142,6 +4142,15 @@
         }
       }
     },
+    "Open Link in New Pane" : {
+
+    },
+    "Open Link in New Tab" : {
+
+    },
+    "Open Link in New Window" : {
+
+    },
     "Open to the Side" : {
       "localizations" : {
         "ja" : {
