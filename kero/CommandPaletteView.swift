@@ -3,6 +3,8 @@
 //  kero
 //
 
+import AppKit
+import Combine
 import FuzzyMatch
 import SwiftUI
 
@@ -80,9 +82,22 @@ struct PaletteCommand: Identifiable {
     }
 }
 
+@MainActor
+private final class PalettePointerSelectionController: ObservableObject {
+    private(set) var acceptsPointerSelection = false
+
+    func reset() {
+        acceptsPointerSelection = false
+    }
+
+    func notePointerMoved() {
+        acceptsPointerSelection = true
+    }
+}
+
 /// Centered ⌘P overlay: fuzzy-searchable list of app actions. Arrow keys
-/// move the selection, Return runs it, Escape (or clicking the backdrop)
-/// dismisses.
+/// move the selection, Return runs it, and Escape clears a query before
+/// dismissing an already-empty palette.
 struct CommandPaletteView: View {
     private struct ScoredProjectFile {
         let file: ProjectFile
@@ -107,6 +122,7 @@ struct CommandPaletteView: View {
     @State private var query = ""
     @State private var selection = 0
     @State private var projectFiles: [ProjectFile] = []
+    @StateObject private var pointerSelectionController = PalettePointerSelectionController()
     @FocusState private var searchFocused: Bool
 
     /// Smith-Waterman uses fzf/nucleo-style boundary and gap scoring while
@@ -127,7 +143,10 @@ struct CommandPaletteView: View {
                 .padding(.top, 110)
         }
         .ignoresSafeArea()
-        .onExitCommand { dismissFromKeyboard() }
+        .background(
+            PalettePointerEventMonitor(controller: pointerSelectionController)
+        )
+        .onExitCommand { handleEscapeFromKeyboard() }
         .onDisappear { manager.restoreFocusAfterCommandPalette() }
         .task(id: fileIndexRoot) {
             projectFiles = []
@@ -308,18 +327,25 @@ struct CommandPaletteView: View {
 
     /// The current project's pinned/automatic panel root. Indexing starts only
     /// after the user types, so opening ⌘P for a command stays filesystem-free.
+    /// Home is excluded because it is an account boundary, not a project root.
     private var fileIndexRoot: String? {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty,
               let project = manager.selectedProject
         else { return nil }
+        let root: String?
         if let session = project.selectedSession {
-            return project.panelRoot(followingSessionAt: session.currentDirectoryPath).root
+            root = project.panelRoot(followingSessionAt: session.currentDirectoryPath).root
+        } else if let pinned = project.customDirectory,
+                  FileManager.default.fileExists(atPath: pinned) {
+            root = pinned
+        } else {
+            root = nil
         }
-        if let pinned = project.customDirectory,
-           FileManager.default.fileExists(atPath: pinned) {
-            return pinned
-        }
-        return nil
+        guard let root else { return nil }
+
+        let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        return standardizedRoot == home ? nil : root
     }
 
     private var filtered: [PaletteCommand] {
@@ -465,7 +491,7 @@ struct CommandPaletteView: View {
                     .focused($searchFocused)
                     .onKeyPress(.downArrow) { move(1); return .handled }
                     .onKeyPress(.upArrow) { move(-1); return .handled }
-                    .onKeyPress(.escape) { dismissFromKeyboard(); return .handled }
+                    .onKeyPress(.escape) { handleEscapeFromKeyboard(); return .handled }
                     .onSubmit { runSelected() }
             }
             .padding(.horizontal, 14)
@@ -494,6 +520,7 @@ struct CommandPaletteView: View {
         .onAppear {
             query = ""
             selection = 0
+            pointerSelectionController.reset()
             // Defer to the next runloop tick: assigning focus synchronously
             // inside the appearance pass can be dropped before the field
             // editor is ready, which left the palette opening unfocused.
@@ -503,6 +530,9 @@ struct CommandPaletteView: View {
         }
         .onChange(of: query) {
             selection = 0
+            // Filtering can rebuild a row under a stationary cursor and emit
+            // mouseEntered even though the user never moved the pointer.
+            pointerSelectionController.reset()
         }
     }
 
@@ -596,9 +626,20 @@ struct CommandPaletteView: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(isSelected ? Color.primary.opacity(0.09) : .clear)
         )
-        .onHover { hovering in
-            if hovering { selection = index }
-        }
+        .background(
+            PaletteRowPointerView(
+                onEntered: {
+                    if pointerSelectionController.acceptsPointerSelection {
+                        selection = index
+                    }
+                },
+                onMoved: {
+                    if pointerSelectionController.acceptsPointerSelection {
+                        selection = index
+                    }
+                }
+            )
+        )
     }
 
     /// Build title styling only for the visible rows. FuzzyMatch's traceback is
@@ -686,6 +727,14 @@ struct CommandPaletteView: View {
 
     private func dismiss() {
         manager.dismissCommandPalette()
+    }
+
+    private func handleEscapeFromKeyboard() {
+        if query.isEmpty {
+            dismissFromKeyboard()
+        } else {
+            query = ""
+        }
     }
 
     /// Escape reaches us as AppKit's `cancelOperation:`, which SwiftUI can
@@ -790,5 +839,111 @@ struct CommandPaletteView: View {
         return files.sorted {
             $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
         }
+    }
+}
+
+private struct PalettePointerEventMonitor: NSViewRepresentable {
+    let controller: PalettePointerSelectionController
+
+    func makeNSView(context: Context) -> PalettePointerMonitorNSView {
+        let view = PalettePointerMonitorNSView()
+        view.controller = controller
+        return view
+    }
+
+    func updateNSView(_ nsView: PalettePointerMonitorNSView, context: Context) {
+        nsView.controller = controller
+    }
+
+    static func dismantleNSView(
+        _ nsView: PalettePointerMonitorNSView,
+        coordinator: ()
+    ) {
+        nsView.detach()
+    }
+}
+
+@MainActor
+private final class PalettePointerMonitorNSView: NSView {
+    weak var controller: PalettePointerSelectionController?
+    private var eventMonitor: Any?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        detach()
+        guard let window else { return }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) {
+            [weak self, weak window] event in
+            MainActor.assumeIsolated {
+                guard window?.isKeyWindow == true else { return }
+                self?.controller?.notePointerMoved()
+            }
+            return event
+        }
+    }
+
+    func detach() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+}
+
+/// AppKit distinguishes a genuine pointer move from the synthetic
+/// `mouseEntered` generated when filtering places a new row under the cursor.
+private struct PaletteRowPointerView: NSViewRepresentable {
+    let onEntered: () -> Void
+    let onMoved: () -> Void
+
+    func makeNSView(context: Context) -> PaletteRowPointerNSView {
+        let view = PaletteRowPointerNSView()
+        view.onEntered = onEntered
+        view.onMoved = onMoved
+        return view
+    }
+
+    func updateNSView(_ nsView: PaletteRowPointerNSView, context: Context) {
+        nsView.onEntered = onEntered
+        nsView.onMoved = onMoved
+    }
+}
+
+private final class PaletteRowPointerNSView: NSView {
+    var onEntered: (() -> Void)?
+    var onMoved: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero,
+                options: [
+                    .mouseEnteredAndExited,
+                    .mouseMoved,
+                    .activeInKeyWindow,
+                    .inVisibleRect,
+                ],
+                owner: self
+            )
+        )
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onEntered?()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        onMoved?()
     }
 }
