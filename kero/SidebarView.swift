@@ -305,7 +305,8 @@ private struct SidebarProjectRow: View {
                 HStack(spacing: 3) {
                     Text(project.activityIndicator ?? "")
                         .font(.system(size: fontSize, design: .monospaced))
-                        .frame(width: max(10, fontSize), alignment: .center)
+                        // Fits Braille frames and Grok's ⚠ approval glyph.
+                        .frame(width: max(14, fontSize), alignment: .center)
                         .foregroundStyle(isSelected ? .primary : .secondary)
                         .accessibilityHidden(true)
                     if isRenaming {
