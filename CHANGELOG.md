@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- Fix: never set `LANG` env for the terminal session
+
 ## [0.1.32]
 
 - Add native English, Simplified Chinese, and Japanese localization throughout the app, with a language picker in Settings

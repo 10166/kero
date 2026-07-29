@@ -275,9 +275,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         if let pathOverride, !pathOverride.isEmpty {
             environment["PATH"] = pathOverride
         }
-        if ProcessInfo.processInfo.environment["LANG"] == nil {
-            environment["LANG"] = "en_US.UTF-8"
-        }
+        // Locale belongs to the user's shell environment. Kero's app language
+        // must never synthesize or override LANG/LC_* for terminal processes.
         return environment
     }
 
