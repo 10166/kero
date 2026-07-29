@@ -8,7 +8,7 @@ import Combine
 import Foundation
 
 /// A project groups tabs and appears as one row in the left sidebar. Each tab
-/// is a niri-style layout of panes (terminal sessions and open files); see
+/// is a recursive split layout of terminal, file, browser, and diff panes; see
 /// `PaneTab`. It always starts with one session; closing the last tab leaves
 /// the project open but empty — only the explicit "Close Project" action (see
 /// `TerminalManager.close(_:)`) removes it from the manager.
@@ -242,9 +242,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     func splitDown() { split(toward: .bottom) }
     func splitUp() { split(toward: .top) }
 
-    /// Splits the focused pane on `edge` with a fresh terminal. Left/right open
-    /// a new column; top/bottom stack within the focused column. No-op while a
-    /// diff is focused.
+    /// Splits the focused pane's rectangle on `edge` with a fresh terminal.
+    /// No-op while a diff is focused.
     func split(toward edge: PaneDropEdge) {
         guard let tab = selectedTab, tab.canSplit else { return }
         let session = makeSession()
@@ -630,25 +629,33 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         from snap: SessionSnapshot.ProjectSnapshot.TabSnapshot,
         histories: [String: String] = [:]
     ) {
-        var columns: [PaneColumn] = []
-        for columnSnap in snap.columns {
-            var panes: [Pane] = []
-            for paneSnap in columnSnap.panes {
-                let restoredHistory = paneSnap.historyKey.flatMap { histories[$0] }
-                panes.append(Pane(
-                    content: makeContent(from: paneSnap.content, restoredHistory: restoredHistory),
-                    weight: CGFloat(paneSnap.weight)
-                ))
-            }
-            guard !panes.isEmpty else { continue }
-            columns.append(PaneColumn(panes: panes, weight: CGFloat(columnSnap.weight)))
-        }
-        guard !columns.isEmpty else { return }
-        let col = min(max(0, snap.focusedColumn), columns.count - 1)
-        let row = min(max(0, snap.focusedRow), columns[col].panes.count - 1)
-        let tab = PaneTab(columns: columns, focusedPaneID: columns[col].panes[row].id)
+        let layout = restoreLayout(from: snap.layout, histories: histories)
+        let panes = layout.allPanes
+        guard !panes.isEmpty else { return }
+        let focusedIndex = min(max(0, snap.focusedPaneIndex), panes.count - 1)
+        let tab = PaneTab(layout: layout, focusedPaneID: panes[focusedIndex].id)
         tab.customName = snap.customName
         append(tab)
+    }
+
+    private func restoreLayout(
+        from snap: SessionSnapshot.ProjectSnapshot.LayoutSnapshot,
+        histories: [String: String]
+    ) -> PaneNode {
+        switch snap {
+        case .pane(let pane):
+            let restoredHistory = pane.historyKey.flatMap { histories[$0] }
+            return .pane(Pane(content: makeContent(
+                from: pane.content, restoredHistory: restoredHistory
+            )))
+        case .split(let axis, let fraction, let first, let second):
+            return .split(PaneSplit(
+                axis: axis,
+                fraction: CGFloat(fraction),
+                first: restoreLayout(from: first, histories: histories),
+                second: restoreLayout(from: second, histories: histories)
+            ))
+        }
     }
 
     private func makeContent(

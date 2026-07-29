@@ -621,8 +621,8 @@ private final class TabSwitcherInteractionNSView: NSView {
     }
 }
 
-/// A small but structurally faithful rendering of a tab. Split column and row
-/// weights are preserved; each pane supplies a backend-independent preview.
+/// A small but structurally faithful rendering of a tab. The recursive split
+/// geometry is preserved; each pane supplies a backend-independent preview.
 private struct TabThumbnail: View {
     @ObservedObject var tab: PaneTab
     let terminalPreviews: [UUID: String]
@@ -631,52 +631,36 @@ private struct TabThumbnail: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let columns = tab.isZoomed ? zoomedColumns : tab.columns
-            let widths = sizes(
-                for: columns.map(\.weight),
-                available: geometry.size.width,
-                gaps: columns.count
-            )
-
-            HStack(spacing: gap) {
-                ForEach(Array(columns.enumerated()), id: \.element.id) { columnIndex, column in
-                    let heights = sizes(
-                        for: column.panes.map(\.weight),
-                        available: geometry.size.height,
-                        gaps: column.panes.count
-                    )
-                    VStack(spacing: gap) {
-                        ForEach(Array(column.panes.enumerated()), id: \.element.id) {
-                            paneIndex, pane in
-                            TabPaneThumbnail(
-                                content: pane.content,
-                                terminalPreview: terminalPreviews[pane.content.id]
-                            )
-                            .frame(height: heights[paneIndex])
-                        }
+            if tab.isZoomed, let pane = tab.focusedPane {
+                TabPaneThumbnail(
+                    content: pane.content,
+                    terminalPreview: terminalPreviews[pane.content.id]
+                )
+            } else {
+                let placements = tab.layout.geometry(
+                    in: CGRect(origin: .zero, size: geometry.size), gap: gap
+                ).panes
+                ZStack(alignment: .topLeading) {
+                    ForEach(placements) { placement in
+                        TabPaneThumbnail(
+                            content: placement.pane.content,
+                            terminalPreview: terminalPreviews[
+                                placement.pane.content.id
+                            ]
+                        )
+                        .frame(
+                            width: placement.frame.width,
+                            height: placement.frame.height
+                        )
+                        .offset(
+                            x: placement.frame.minX,
+                            y: placement.frame.minY
+                        )
                     }
-                    .frame(width: widths[columnIndex])
                 }
             }
         }
         .background(Color(nsColor: Theme.background))
-    }
-
-    private var zoomedColumns: [PaneColumn] {
-        guard let pane = tab.focusedPane else { return tab.columns }
-        return [PaneColumn(panes: [pane])]
-    }
-
-    private func sizes(
-        for weights: [CGFloat], available: CGFloat, gaps count: Int
-    ) -> [CGFloat] {
-        let usable = max(0, available - gap * CGFloat(max(0, count - 1)))
-        let total = weights.reduce(0, +)
-        guard total > 0 else {
-            let each = weights.isEmpty ? 0 : usable / CGFloat(weights.count)
-            return weights.map { _ in each }
-        }
-        return weights.map { usable * $0 / total }
     }
 }
 
