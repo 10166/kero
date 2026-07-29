@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+## [0.1.33]
+
 - Fix: never set `LANG` env for the terminal session
 
 ## [0.1.32]
