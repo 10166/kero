@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+## [0.1.34]
+
 - Show terminal titles verbatim while keeping sidebar project rows stable as titles update or hover controls appear
 - Follow the terminal's foreground job into another checkout: when an agent
   switches to its own git worktree, Files, Git and Info re-root to it
