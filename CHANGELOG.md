@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- Follow the terminal's foreground job into another checkout: when an agent
+  switches to its own git worktree, Files, Git and Info re-root to it
 - Settings font preview now reflects “Thicken font strokes”
 - Prevent terminal tabs from crashing after switching sessions or resizing during a partial redraw
 - Files created in a terminal now use your system's default permissions instead of being made private to your user
