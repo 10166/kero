@@ -16,6 +16,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- Settings font preview now reflects “Thicken font strokes”
 - Prevent terminal tabs from crashing after switching sessions or resizing during a partial redraw
 - Files created in a terminal now use your system's default permissions instead of being made private to your user
 
