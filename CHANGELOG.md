@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- The Files panel now shows repository status with colored filenames and badges, including dimmed Git-ignored files
+
 ## [0.1.35]
 
 - Add per-pane live titles and split controls in split layouts
