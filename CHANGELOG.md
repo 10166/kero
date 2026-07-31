@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+## [0.1.36]
+
 - The Files panel now shows repository status with colored filenames and badges, including dimmed Git-ignored files
 - Switch directly to tabs with Ctrl+1–9, without also holding Shift
 
