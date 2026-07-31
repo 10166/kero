@@ -303,7 +303,7 @@ private struct SidebarProjectRow: View {
                 if isRenaming {
                     TextField("", text: $renameDraft)
                         .textFieldStyle(.plain)
-                        .font(.system(size: fontSize, weight: .medium))
+                        .font(.system(size: projectTitleFontSize, weight: .medium))
                         .focused($renameFocused)
                         .onSubmit(commitRename)
                         .onExitCommand { isRenaming = false }
@@ -314,7 +314,7 @@ private struct SidebarProjectRow: View {
                         }
                 } else {
                     Text(project.name)
-                        .font(.system(size: fontSize))
+                        .font(.system(size: projectTitleFontSize))
                         .foregroundStyle(isSelected ? .primary : .secondary)
                         .lineLimit(1)
                 }
@@ -376,7 +376,17 @@ private struct SidebarProjectRow: View {
     }
 
     private var supportingFontSize: Double {
-        max(fontSize - 2, AppSettings.sidebarFontSizeRange.lowerBound - 1)
+        10 * sidebarFontScale
+    }
+
+    /// Match the file-tree label's designed 11.5 pt size while following the
+    /// shared sidebar font-size setting.
+    private var projectTitleFontSize: Double {
+        11.5 * sidebarFontScale
+    }
+
+    private var sidebarFontScale: Double {
+        fontSize / AppSettings.defaultSidebarFontSize
     }
 }
 

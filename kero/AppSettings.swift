@@ -104,7 +104,7 @@ final class AppSettings: nonisolated ObservableObject {
 
     static let defaultFontSize: Double = 13
     static let fontSizeRange: ClosedRange<Double> = 8...32
-    static let defaultSidebarFontSize: Double = 13
+    static let defaultSidebarFontSize: Double = 14
     static let sidebarFontSizeRange: ClosedRange<Double> = 9...18
 
     /// The language this process launched with, kept separate from the pending
