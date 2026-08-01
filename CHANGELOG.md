@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unrelease]
 
+- Keep the left sidebar toggle available in the main header while the sidebar is hidden
+
 ## [0.1.36]
 
 - The Files panel now shows repository status with colored filenames and badges, including dimmed Git-ignored files
