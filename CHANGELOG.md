@@ -17,6 +17,7 @@ the original feature bullet instead of adding separate entries for them.
 ## [unrelease]
 
 - Keep the left sidebar toggle available in the main header while the sidebar is hidden
+- Adjust sidebar project typography scaling
 
 ## [0.1.36]
 
