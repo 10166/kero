@@ -165,6 +165,10 @@ private struct MainHeaderView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject private var themeChanges = Theme.changes
 
+    /// Keep an always-available grab target beside the trailing controls,
+    /// even when the session strip is full.
+    private let minimumWindowDragWidth: CGFloat = 100
+
     /// With the left sidebar hidden the header slides under the window's
     /// traffic-light buttons, so inset its content to clear them.
     private var leadingInset: CGFloat {
@@ -178,14 +182,19 @@ private struct MainHeaderView: View {
                     // Everything in the header that isn't the scrollable tab
                     // strip: leading inset + trailing padding (8), HStack
                     // spacings (16), sidebar toggle (24), "+" and spacing (26),
-                    // and the exit-zoom button (24 + 8 spacing) while shown.
+                    // the minimum drag target (100), and the exit-zoom button
+                    // (24 + 8 spacing) while shown.
                     SessionTabsView(
                         project: project,
-                        maxStripWidth: max(0, geo.size.width - leadingInset - 74 - (manager.isPaneZoomed ? 32 : 0))
+                        maxStripWidth: max(
+                            0,
+                            geo.size.width - leadingInset - 74 - minimumWindowDragWidth
+                                - (manager.isPaneZoomed ? 32 : 0)
+                        )
                     )
                 }
                 WindowDragArea()
-                    .frame(maxWidth: .infinity)
+                    .frame(minWidth: minimumWindowDragWidth, maxWidth: .infinity)
                 // Zoom indicator: only visible while the selected tab has a
                 // zoomed pane. Styled like the sidebar toggle next to it, with
                 // the accent tint marking the active state. Click restores the
