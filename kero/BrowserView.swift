@@ -179,6 +179,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private var faviconRevision: UInt = 0
 
     private static let maximumFaviconBytes = 2 * 1_024 * 1_024
+    /// WKWebView's default macOS user agent has no browser/version token, so
+    /// some sites mistake the current WebKit engine for an obsolete browser.
+    private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
     private static let faviconCache: NSCache<NSURL, NSImage> = {
         let cache = NSCache<NSURL, NSImage>()
         cache.countLimit = 128
@@ -234,6 +237,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         self.initialFocus = initialFocus
         super.init()
 
+        webView.customUserAgent = Self.userAgent
         contextMenuBridge.webView = webView
         webView.navigationDelegate = self
         webView.uiDelegate = self
