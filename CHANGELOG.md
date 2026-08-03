@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.38]
+
 - Terminal notifications play the system sound
 - Browser tabs now use a modern Safari user agent, fixing sites such as Bilibili that otherwise report an outdated browser
 
