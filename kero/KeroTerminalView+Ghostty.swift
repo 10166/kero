@@ -82,11 +82,11 @@ extension KeroTerminalView {
             // host adds a 2pt pane-background frame around the surface, so
             // the fill stops just short of the pane edges; these values plus
             // that frame put the text at least 12pt from the sides and 10pt
-            // from the top/bottom). balance re-centers the grid, splitting
-            // the sub-cell remainder evenly per axis instead of stranding
-            // the prompt a full row above the pane's bottom edge; it also
-            // makes each side's padding equal to the value here plus half
-            // the remainder, so per-side asymmetry is not expressible.
+            // from the top/bottom). Balance splits sub-cell remainder across
+            // both edges instead of leaving what looks like a reserved strip
+            // below the final row. Git context is cached per terminal root so
+            // tab selection no longer resizes through an intermediate toolbar
+            // state and makes that balanced origin move twice.
             builder.withWindowPaddingX(10)
             builder.withWindowPaddingY(8)
             builder.withCustom("window-padding-balance", "true")
@@ -165,6 +165,19 @@ extension KeroTerminalView: TerminalSurfaceTitleDelegate {
 extension KeroTerminalView: TerminalSurfacePwdDelegate {
     func terminalDidChangeWorkingDirectory(_ path: String) {
         events?.terminalDidChangeWorkingDirectory(path)
+    }
+}
+
+extension KeroTerminalView: TerminalSurfaceGridResizeDelegate {
+    func terminalDidResize(_ size: TerminalGridMetrics) {
+        let scale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        guard scale > 0 else { return }
+        events?.terminalDidChangeCellSize(CGSize(
+            width: CGFloat(size.cellWidthPixels) / scale,
+            height: CGFloat(size.cellHeightPixels) / scale
+        ))
     }
 }
 

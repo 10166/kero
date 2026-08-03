@@ -425,6 +425,16 @@
         }
       }
     },
+    "+%lld, −%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "+%1$lld, −%2$lld"
+          }
+        }
+      }
+    },
     "A name can’t contain “/” or be “.” or “..”." : {
       "localizations" : {
         "ja" : {
@@ -597,6 +607,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "允许访问剪贴板"
+          }
+        }
+      }
+    },
+    "Auto" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动"
+          }
+        }
+      }
+    },
+    "Always Show" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常に表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "始终显示"
+          }
+        }
+      }
+    },
+    "Shows the toolbar in every project" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのプロジェクトでツールバーを表示します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在所有项目中显示工具栏"
+          }
+        }
+      }
+    },
+    "Shows the toolbar only in Git repositories" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gitリポジトリでのみツールバーを表示します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在 Git 仓库中显示工具栏"
           }
         }
       }
@@ -842,18 +916,18 @@
         }
       }
     },
-    "Changes apply to new terminals." : {
+    "Changes apply to new terminals" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "変更はこれから開くターミナルに適用されます。"
+            "value" : "変更はこれから開くターミナルに適用されます"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "更改将应用于新建的终端。"
+            "value" : "更改将应用于新建的终端"
           }
         }
       }
@@ -1176,22 +1250,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "颜色"
-          }
-        }
-      }
-    },
-    "Colors for the whole window, one theme per appearance." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ウインドウ全体の色を、外観ごとに1つのテーマで設定します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "为整个窗口设置颜色，明暗外观各用一套主题。"
           }
         }
       }
@@ -1890,6 +1948,23 @@
         }
       }
     },
+    "default" : {
+      "comment" : "Badge for the repository's default branch.",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
+          }
+        }
+      }
+    },
     "Delete %@? Its contents will move to the Trash." : {
       "comment" : "Discard confirmation. The placeholder is an untracked file name.",
       "localizations" : {
@@ -2457,6 +2532,22 @@
         }
       }
     },
+    "Filter branches" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチを絞り込む"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选分支"
+          }
+        }
+      }
+    },
     "Filter changed files" : {
       "localizations" : {
         "ja" : {
@@ -2985,6 +3076,22 @@
         }
       }
     },
+    "Toolbar" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツールバー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具栏"
+          }
+        }
+      }
+    },
     "GPU-accelerated" : {
       "localizations" : {
         "ja" : {
@@ -2997,6 +3104,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "GPU 加速"
+          }
+        }
+      }
+    },
+    "Hide" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "非表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏"
           }
         }
       }
@@ -3196,6 +3319,22 @@
     },
     "kero" : {
       "shouldTranslate" : false
+    },
+    "Keeps the toolbar hidden" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツールバーを常に非表示にします"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "始终隐藏工具栏"
+          }
+        }
+      }
     },
     "Kero did not provide any %@ themes." : {
       "localizations" : {
@@ -4906,34 +5045,34 @@
         }
       }
     },
-    "Renders terminal text with slightly heavier strokes, like classic macOS font smoothing." : {
+    "Renders terminal text with slightly heavier strokes, like classic macOS font smoothing" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "クラシックなmacOSのフォントスムージングのように、ターミナルの文字を少し太い線で描画します。"
+            "value" : "クラシックなmacOSのフォントスムージングのように、ターミナルの文字を少し太い線で描画します"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "以稍粗的笔画渲染终端文字，效果类似经典 macOS 字体平滑。"
+            "value" : "以稍粗的笔画渲染终端文字，效果类似经典 macOS 字体平滑"
           }
         }
       }
     },
-    "Reopened terminals show their previous scrollback above a fresh shell." : {
+    "Reopened terminals show their previous scrollback above a fresh shell" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "再度開いたターミナルでは、新しいシェルの上に以前のスクロール履歴が表示されます。"
+            "value" : "再度開いたターミナルでは、新しいシェルの上に以前のスクロール履歴が表示されます"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重新打开的终端会在新的 Shell 上方显示之前的滚动历史。"
+            "value" : "重新打开的终端会在新的 Shell 上方显示之前的滚动历史"
           }
         }
       }
@@ -5471,18 +5610,18 @@
         }
       }
     },
-    "Sends Option-key combinations to terminal programs as Meta shortcuts instead of macOS text input." : {
+    "Sends Option-key combinations to terminal programs as Meta shortcuts instead of macOS text input" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Optionキーの組み合わせを、macOSの文字入力ではなくMetaショートカットとしてターミナルに送ります。"
+            "value" : "Optionキーの組み合わせを、macOSの文字入力ではなくMetaショートカットとしてターミナルに送ります"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将 Option 键组合作为 Meta 快捷键发送给终端程序，而不是作为 macOS 文本输入。"
+            "value" : "将 Option 键组合作为 Meta 快捷键发送给终端程序，而不是作为 macOS 文本输入"
           }
         }
       }
@@ -5982,6 +6121,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "停止载入"
+          }
+        }
+      }
+    },
+    "Switch Branch" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチを切り替え"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换分支"
           }
         }
       }

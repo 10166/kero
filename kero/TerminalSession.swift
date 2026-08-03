@@ -24,6 +24,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     @Published var workingDirectory: String?
     @Published var hasExited = false
     @Published private(set) var commandLifecycle = TerminalCommandLifecycle()
+    @Published private(set) var terminalCellSize: CGSize?
 
     /// The emulator driving this session. Fixed for the session's lifetime —
     /// changing the setting only affects terminals opened afterwards.
@@ -425,6 +426,12 @@ extension TerminalSession: TerminalBackendEvents {
         guard !path.isEmpty else { return }
         workingDirectory = path.hasPrefix("/")
             ? URL(fileURLWithPath: path).absoluteString : path
+    }
+
+    func terminalDidChangeCellSize(_ size: CGSize) {
+        guard size.width > 0, size.height > 0,
+              terminalCellSize != size else { return }
+        terminalCellSize = size
     }
 
     func terminalDidRingBell() {

@@ -133,10 +133,13 @@ final class GitStatusModel: nonisolated ObservableObject {
     @Published private(set) var ahead = 0
     @Published private(set) var behind = 0
     @Published private(set) var hasUpstream = false
+    @Published private(set) var lineAdditions = 0
+    @Published private(set) var lineDeletions = 0
     @Published private(set) var mergeEntries: [Entry] = []
     @Published private(set) var stagedEntries: [Entry] = []
     @Published private(set) var changedEntries: [Entry] = []
     @Published private(set) var branches: [String] = []
+    @Published private(set) var defaultBranch: String?
     @Published private(set) var remotes: [String] = []
     @Published private(set) var recentCommits: [RecentCommit] = []
     @Published private(set) var repositoryOperation: String?
@@ -157,6 +160,11 @@ final class GitStatusModel: nonisolated ObservableObject {
     private var topLevel = ""
     /// Invalidates async refreshes and operations after the terminal changes cwd.
     private var contextGeneration: UInt = 0
+    /// Restores a previously resolved directory immediately when switching
+    /// tabs. Without this, every return to a repository clears `isRepo` until
+    /// the asynchronous Git refresh finishes, briefly removing the toolbar
+    /// and resizing the terminal through the wrong height.
+    private var cachedStatusByRoot: [String: StatusLoadResult] = [:]
     /// Invalidates an in-flight status refresh when a mutation begins, so its
     /// pre-operation snapshot cannot overwrite the post-operation state.
     private var statusRequestID: UInt = 0
@@ -234,6 +242,10 @@ final class GitStatusModel: nonisolated ObservableObject {
             rootPath = root
             hasResolvedStatus = false
             clearRepositoryState(preserveIdentity: true)
+            if let cachedStatus = cachedStatusByRoot[root] {
+                apply(cachedStatus)
+                hasResolvedStatus = true
+            }
         }
         refresh()
     }
@@ -259,6 +271,12 @@ final class GitStatusModel: nonisolated ObservableObject {
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
             self.isRefreshing = false
+            switch result {
+            case .repository, .notRepository:
+                self.cachedStatusByRoot[root] = result
+            case .failed:
+                break
+            }
             self.apply(result)
             self.hasResolvedStatus = true
             if self.refreshPending {
@@ -907,12 +925,15 @@ final class GitStatusModel: nonisolated ObservableObject {
         ahead = 0
         behind = 0
         hasUpstream = false
+        lineAdditions = 0
+        lineDeletions = 0
         mergeEntries = []
         stagedEntries = []
         changedEntries = []
         fileDecorations = [:]
         ignoredPaths = []
         branches = []
+        defaultBranch = nil
         remotes = []
         recentCommits = []
         repositoryOperation = nil
@@ -969,10 +990,13 @@ final class GitStatusModel: nonisolated ObservableObject {
         ahead = result.ahead
         behind = result.behind
         hasUpstream = result.upstream != nil
+        lineAdditions = result.lineAdditions
+        lineDeletions = result.lineDeletions
         topLevel = result.topLevel
         repositoryIdentity = result.topLevel
         if result.loadedDetails {
             branches = result.branches
+            defaultBranch = result.defaultBranch
             remotes = result.remotes
             recentCommits = result.recentCommits
             repositoryOperation = result.repositoryOperation
@@ -1010,10 +1034,13 @@ final class GitStatusModel: nonisolated ObservableObject {
         var upstream: String?
         var ahead = 0
         var behind = 0
+        var lineAdditions = 0
+        var lineDeletions = 0
         var topLevel = ""
         var entries: [Entry] = []
         var ignoredPaths: Set<String> = []
         var branches: [String] = []
+        var defaultBranch: String?
         var remotes: [String] = []
         var recentCommits: [RecentCommit] = []
         var repositoryOperation: String?
@@ -1111,6 +1138,29 @@ final class GitStatusModel: nonisolated ObservableObject {
         var result = parseStatus(status.stdout)
         result.topLevel = resolvedRoot
 
+        let diff = runGit(
+            result.hasHead
+                ? ["diff", "--numstat", "HEAD", "--"]
+                : ["diff", "--numstat", "--cached", "--"],
+            in: resolvedRoot
+        )
+        if diff.status == 0 {
+            let totals = parseNumstat(diff.stdout)
+            result.lineAdditions = totals.additions
+            result.lineDeletions = totals.deletions
+        }
+        // An unborn branch has no HEAD to compare against. Its cached diff is
+        // the initial snapshot; add any edits made after staging as a second
+        // layer so the toolbar still reflects all pending work.
+        if !result.hasHead {
+            let unstaged = runGit(["diff", "--numstat", "--"], in: resolvedRoot)
+            if unstaged.status == 0 {
+                let totals = parseNumstat(unstaged.stdout)
+                result.lineAdditions += totals.additions
+                result.lineDeletions += totals.deletions
+            }
+        }
+
         result.loadedDetails = true
         let repoRoot = resolvedRoot
 
@@ -1124,6 +1174,24 @@ final class GitStatusModel: nonisolated ObservableObject {
         let remoteRun = runGit(["remote"], in: repoRoot)
         if remoteRun.status == 0 {
             result.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
+        }
+
+        // A clone records its remote's default branch as a symbolic HEAD.
+        // Prefer origin when more than one remote is present because that is
+        // the repository the local branch list conventionally belongs to.
+        if let remote = result.remotes.contains("origin") ? "origin" : result.remotes.first {
+            let remoteHead = runGit(
+                ["symbolic-ref", "--quiet", "--short", "refs/remotes/\(remote)/HEAD"],
+                in: repoRoot
+            )
+            let prefix = "\(remote)/"
+            let ref = strippingTrailingLineEnding(remoteHead.stdout)
+            if remoteHead.status == 0, ref.hasPrefix(prefix) {
+                let branch = String(ref.dropFirst(prefix.count))
+                if result.branches.contains(branch) {
+                    result.defaultBranch = branch
+                }
+            }
         }
 
         let log = runGit(
@@ -1250,6 +1318,17 @@ final class GitStatusModel: nonisolated ObservableObject {
             index += 1
         }
         return result
+    }
+
+    /// Adds the numeric columns from `git diff --numstat`. Binary-file rows
+    /// use `-` instead of a count and therefore contribute zero lines.
+    nonisolated static func parseNumstat(_ output: String) -> (additions: Int, deletions: Int) {
+        output.split(separator: "\n").reduce(into: (additions: 0, deletions: 0)) { total, row in
+            let fields = row.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            guard fields.count >= 2 else { return }
+            total.additions += Int(fields[0]) ?? 0
+            total.deletions += Int(fields[1]) ?? 0
+        }
     }
 
     private static func fileDecoration(for entry: Entry) -> FileDecoration {

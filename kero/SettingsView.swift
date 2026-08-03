@@ -17,6 +17,17 @@ struct SettingsView: View {
     /// Installed fixed-pitch families (bundled default first).
     private let families = TerminalFont.selectableFamilies()
 
+    private var toolbarVisibilityDescription: LocalizedStringKey {
+        switch settings.toolbarVisibility {
+        case .auto:
+            "Shows the toolbar only in Git repositories"
+        case .always:
+            "Shows the toolbar in every project"
+        case .hide:
+            "Keeps the toolbar hidden"
+        }
+    }
+
     var body: some View {
         CappedIdealHeight(maxHeight: 600) { form }
     }
@@ -37,6 +48,18 @@ struct SettingsView: View {
                     ForEach(AppLanguage.allCases) { language in
                         Text(verbatim: language.title).tag(language)
                     }
+                }
+
+                DescribedSettingsRow(
+                    "Toolbar",
+                    description: toolbarVisibilityDescription
+                ) {
+                    Picker("Toolbar", selection: $settings.toolbarVisibility) {
+                        Text("Auto").tag(ToolbarVisibility.auto)
+                        Text("Always Show").tag(ToolbarVisibility.always)
+                        Text("Hide").tag(ToolbarVisibility.hide)
+                    }
+                    .labelsHidden()
                 }
 
                 if settings.languageRequiresRelaunch {
@@ -63,9 +86,6 @@ struct SettingsView: View {
                         Text(name).tag(name)
                     }
                 }
-                Text("Colors for the whole window, one theme per appearance.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
 
             Section("Font") {
@@ -150,33 +170,42 @@ struct SettingsView: View {
                         Spacer()
                         VStack(alignment: .leading, spacing: 8) {
                             TerminalBackendPicker(selection: $settings.terminalBackend)
-                            Text("Changes apply to new terminals.")
+                            Text("Changes apply to new terminals")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
 
-                Toggle("Thicken font strokes", isOn: $settings.fontThicken)
-                Text("Renders terminal text with slightly heavier strokes, like classic macOS font smoothing.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                DescribedSettingsRow(
+                    "Thicken font strokes",
+                    description: "Renders terminal text with slightly heavier strokes, like classic macOS font smoothing"
+                ) {
+                    Toggle("Thicken font strokes", isOn: $settings.fontThicken)
+                        .labelsHidden()
+                }
 
-                Toggle(
+                DescribedSettingsRow(
                     "Use Option as Alt/Meta",
-                    isOn: $settings.macosOptionAsAlt
-                )
-                Text("Sends Option-key combinations to terminal programs as Meta shortcuts instead of macOS text input.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    description: "Sends Option-key combinations to terminal programs as Meta shortcuts instead of macOS text input"
+                ) {
+                    Toggle(
+                        "Use Option as Alt/Meta",
+                        isOn: $settings.macosOptionAsAlt
+                    )
+                    .labelsHidden()
+                }
 
-                Toggle(
+                DescribedSettingsRow(
                     "Restore session history on relaunch",
-                    isOn: $settings.restoreTerminalHistory
-                )
-                Text("Reopened terminals show their previous scrollback above a fresh shell.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    description: "Reopened terminals show their previous scrollback above a fresh shell"
+                ) {
+                    Toggle(
+                        "Restore session history on relaunch",
+                        isOn: $settings.restoreTerminalHistory
+                    )
+                    .labelsHidden()
+                }
             }
 
             Section("Text Editing") {
@@ -210,6 +239,7 @@ struct SettingsView: View {
                         && settings.theme == .system
                         && settings.themeDark == Theme.defaultDarkThemeName
                         && settings.themeLight == Theme.defaultLightThemeName
+                        && settings.toolbarVisibility == AppSettings.defaultToolbarVisibility
                         && !settings.wrapLines
                         && !settings.restoreTerminalHistory
                         && settings.terminalBackend == .fallback)
@@ -257,6 +287,39 @@ struct SettingsView: View {
     /// split by the appearance slot they suit.
     private static let darkThemeNames = Theme.commonDarkThemes.map(\.name)
     private static let lightThemeNames = Theme.commonLightThemes.map(\.name)
+}
+
+/// Matches macOS Settings: a title and explanation form one label stack,
+/// while the setting control stays aligned to the row's top-right corner.
+private struct DescribedSettingsRow<Control: View>: View {
+    let title: LocalizedStringKey
+    let description: LocalizedStringKey
+    let control: Control
+
+    init(
+        _ title: LocalizedStringKey,
+        description: LocalizedStringKey,
+        @ViewBuilder control: () -> Control
+    ) {
+        self.title = title
+        self.description = description
+        self.control = control()
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(description)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            control
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
 }
 
 /// Settings font preview that honors `font-thicken`. Ghostty thickens by

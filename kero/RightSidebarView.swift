@@ -10,10 +10,10 @@ import SwiftUI
 /// button or ⇧⌘B. Files/Git switch via tabs along its top, otty-style.
 struct RightSidebarView: View {
     @ObservedObject var manager: TerminalManager
+    @ObservedObject var git: GitStatusModel
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @StateObject private var fileTree = FileTreeModel()
-    @StateObject private var git = GitStatusModel()
     @StateObject private var info = SessionInfoModel()
     @State private var applicationIsActive = NSApp.isActive
     /// Which rule produced the current panel root; drives the Files badge.
@@ -114,7 +114,7 @@ struct RightSidebarView: View {
                 } catch {
                     return
                 }
-                syncModels(refreshGitStatus: false)
+                syncModels()
             }
         }
         .onReceive(NotificationCenter.default.publisher(
@@ -201,7 +201,7 @@ struct RightSidebarView: View {
         .accessibilityValue(isActive ? "Selected" : "Not selected")
     }
 
-    private func syncModels(refreshGitStatus: Bool = true) {
+    private func syncModels() {
         guard manager.isPanelVisible,
               let project = manager.selectedProject,
               let session = project.selectedSession
@@ -220,8 +220,8 @@ struct RightSidebarView: View {
         switch manager.panelTab {
         case .files:
             fileTree.sync(root: root)
-            if refreshGitStatus { git.sync(root: root) }
-        case .git: git.sync(root: root)
+        case .git:
+            break
         case .info:
             info.sync(
                 root: cwd, projectRoot: root, projectRootSource: source,
