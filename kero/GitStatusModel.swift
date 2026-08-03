@@ -1160,6 +1160,13 @@ final class GitStatusModel: nonisolated ObservableObject {
                 result.lineDeletions += totals.deletions
             }
         }
+        // `git diff` intentionally omits untracked files. Count their text
+        // lines as additions so the compact toolbar totals cover all pending
+        // work reported by the porcelain snapshot.
+        result.lineAdditions += untrackedLineAdditions(
+            for: result.entries,
+            in: resolvedRoot
+        )
 
         result.loadedDetails = true
         let repoRoot = resolvedRoot
@@ -1329,6 +1336,56 @@ final class GitStatusModel: nonisolated ObservableObject {
             total.additions += Int(fields[0]) ?? 0
             total.deletions += Int(fields[1]) ?? 0
         }
+    }
+
+    /// Git's numstat output has no representation for untracked files. Mirror
+    /// its new-text-file behavior without spawning one Git process per path.
+    private nonisolated static func untrackedLineAdditions(
+        for entries: [Entry], in root: String
+    ) -> Int {
+        let rootURL = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL
+        let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+
+        return entries.lazy
+            .filter { $0.staged == "?" }
+            .reduce(into: 0) { total, entry in
+                let fileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
+                guard fileURL.path.hasPrefix(rootPrefix) else { return }
+                total += textLineCount(at: fileURL)
+            }
+    }
+
+    /// Counts logical lines while using Git's usual NUL-byte binary heuristic.
+    /// Symlink content is its destination path, which is one added line.
+    private nonisolated static func textLineCount(at url: URL) -> Int {
+        guard let values = try? url.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+        ) else { return 0 }
+        if values.isSymbolicLink == true { return 1 }
+        guard values.isRegularFile == true,
+              let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? handle.close() }
+
+        let binaryProbeSize = 8_000
+        guard let probe = try? handle.read(upToCount: binaryProbeSize),
+              !probe.contains(0) else { return 0 }
+
+        var byteCount = probe.count
+        var newlineCount = probe.reduce(into: 0) { count, byte in
+            if byte == 0x0A { count += 1 }
+        }
+        var lastByte = probe.last
+
+        while let chunk = try? handle.read(upToCount: 64 * 1_024), !chunk.isEmpty {
+            byteCount += chunk.count
+            newlineCount += chunk.reduce(into: 0) { count, byte in
+                if byte == 0x0A { count += 1 }
+            }
+            lastByte = chunk.last
+        }
+
+        guard byteCount > 0 else { return 0 }
+        return newlineCount + (lastByte == 0x0A ? 0 : 1)
     }
 
     private static func fileDecoration(for entry: Entry) -> FileDecoration {

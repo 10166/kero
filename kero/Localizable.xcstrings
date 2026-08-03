@@ -1030,6 +1030,22 @@
         }
       }
     },
+    "Clean" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更なし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无更改"
+          }
+        }
+      }
+    },
     "Clear Filter" : {
       "localizations" : {
         "ja" : {

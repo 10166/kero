@@ -16,6 +16,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- Show a green Clean status for unchanged repositories and include untracked files in the Git toolbar's added-line count
 - Clicking a terminal notification activates Kero and jumps to the session that posted it
 - Fix desktop notifications from Grok and other OSC 777 clients when using the Alacritty terminal backend
 - Close all open files or diffs from the tab bar context menu
