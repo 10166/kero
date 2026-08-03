@@ -115,7 +115,7 @@ final class AppSettings: nonisolated ObservableObject {
     static let fontSizeRange: ClosedRange<Double> = 8...32
     static let defaultSidebarFontSize: Double = 14
     static let sidebarFontSizeRange: ClosedRange<Double> = 9...18
-    static let defaultToolbarVisibility: ToolbarVisibility = .always
+    static let defaultToolbarVisibility: ToolbarVisibility = .hide
 
     /// The language this process launched with, kept separate from the pending
     /// selection so Settings can explain when a relaunch is required.

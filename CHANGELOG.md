@@ -16,7 +16,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
-- Show the active Git branch and aggregate added/deleted line counts in a toolbar below the active tab, with searchable branch switching, quick access to changed-file diffs, and a setting to hide the toolbar
+## [0.1.39]
+
+- Show the active Git branch and aggregate added/deleted line counts in a toolbar below the active tab, with searchable branch switching, quick access to changed-file diffs, and a setting to show or hide the toolbar (hidden by default)
+- Register sound for terminal notifications so System Settings shows Play sound and alerts can chime, including for installs that already allowed notifications
 
 ## [0.1.38]
 
