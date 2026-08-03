@@ -9,7 +9,7 @@ import Foundation
 import PierreDiffsSwift
 import SwiftUI
 
-/// Mutable pipe storage shared by the two background readers in
+/// Mutable pipe storage shared by the two dedicated readers in
 /// `DiffTab.runGitData`. Each instance is written by exactly one reader.
 private nonisolated final class DiffPipeData: @unchecked Sendable {
     var value = Data()
@@ -44,6 +44,13 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     /// Diffs HEAD → index instead of index → worktree.
     let staged: Bool
     var untracked: Bool
+    /// Historical commit shown by this tab. Nil keeps the existing
+    /// index/worktree behavior.
+    let commitHash: String?
+    /// First parent and name-status metadata used to describe a historical
+    /// comparison in the tab strip.
+    let commitParentHash: String?
+    let commitStatus: Character?
     /// Previous path when the change is a rename/copy; the "before" side
     /// reads from here so renames diff old file → new file like VS Code.
     var origPath: String?
@@ -64,12 +71,24 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     private nonisolated static let maxBytes = 5 << 20
     private var reloadGeneration: UInt = 0
 
-    init(repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?) {
+    init(
+        repoRoot: String,
+        path: String,
+        staged: Bool,
+        untracked: Bool,
+        origPath: String?,
+        commitHash: String? = nil,
+        commitParentHash: String? = nil,
+        commitStatus: Character? = nil
+    ) {
         self.repoRoot = repoRoot
         self.path = path
         self.staged = staged
         self.untracked = untracked
         self.origPath = origPath
+        self.commitHash = commitHash
+        self.commitParentHash = commitParentHash
+        self.commitStatus = commitStatus
         web.fileName = name
         reload()
     }
@@ -79,7 +98,18 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     var title: String {
-        staged
+        if let commitHash {
+            let after = "\(name) (\(commitHash.prefix(7)))"
+            guard let commitParentHash else { return after }
+            let beforeName = ((origPath ?? path) as NSString).lastPathComponent
+            let before = "\(beforeName) (\(commitParentHash.prefix(7)))"
+            switch commitStatus {
+            case "A": return after
+            case "D": return before
+            default: return "\(before) ↔ \(after)"
+            }
+        }
+        return staged
             ? String(localized: "\(name) (Staged)", comment: "Tab title for the staged diff of a file.")
             : name
     }
@@ -94,14 +124,23 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         let oldPath = origPath ?? path
         let staged = staged
         let untracked = untracked
+        let commitHash = commitHash
 
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
                 var failureVar: String?
-                let unmerged = !staged && Self.isUnmerged(path: path, in: root)
+                let unmerged = commitHash == nil && !staged
+                    && Self.isUnmerged(path: path, in: root)
                 let old: String
                 let new: String
-                if staged {
+                if let commitHash {
+                    old = Self.firstGitContent(
+                        ["\(commitHash)^:\(oldPath)"], in: root, error: &failureVar
+                    )
+                    new = Self.firstGitContent(
+                        ["\(commitHash):\(path)"], in: root, error: &failureVar
+                    )
+                } else if staged {
                     old = Self.firstGitContent(
                         ["HEAD:\(oldPath)"], in: root, error: &failureVar
                     )
@@ -210,7 +249,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         let captureLimit = maxBytes + 1
         let readers = DispatchGroup()
         readers.enter()
-        DispatchQueue.global(qos: .utility).async {
+        let stdoutReader = Thread {
             // Drain the pipe so Git cannot deadlock, but retain at most one
             // byte beyond the limit. The index may change between cat-file's
             // size check and this read while an agent is working.
@@ -230,11 +269,15 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
             }
             readers.leave()
         }
+        stdoutReader.qualityOfService = .utility
+        stdoutReader.start()
         readers.enter()
-        DispatchQueue.global(qos: .utility).async {
+        let stderrReader = Thread {
             errData.value = stderr.fileHandleForReading.readDataToEndOfFile()
             readers.leave()
         }
+        stderrReader.qualityOfService = .utility
+        stderrReader.start()
         process.waitUntilExit()
         readers.wait()
         return (

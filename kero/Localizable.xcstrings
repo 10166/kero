@@ -4,9 +4,6 @@
     "" : {
       "shouldTranslate" : false
     },
-    "·" : {
-      "shouldTranslate" : false
-    },
     "(all themes)" : {
       "localizations" : {
         "ja" : {
@@ -157,6 +154,7 @@
       }
     },
     "%@, %@, by %@, %@" : {
+      "comment" : "Commit summary, short hash, author, and relative date for accessibility.",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -531,6 +529,22 @@
         }
       }
     },
+    "Always Show" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常に表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "始终显示"
+          }
+        }
+      }
+    },
     "Amend commit" : {
       "localizations" : {
         "ja" : {
@@ -623,54 +637,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动"
-          }
-        }
-      }
-    },
-    "Always Show" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "常に表示"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "始终显示"
-          }
-        }
-      }
-    },
-    "Shows the toolbar in every project" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてのプロジェクトでツールバーを表示します"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在所有项目中显示工具栏"
-          }
-        }
-      }
-    },
-    "Shows the toolbar only in Git repositories" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gitリポジトリでのみツールバーを表示します"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅在 Git 仓库中显示工具栏"
           }
         }
       }
@@ -3060,6 +3026,22 @@
         }
       }
     },
+    "Git did not respond in time." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git が時間内に応答しませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 未及时响应。"
+          }
+        }
+      }
+    },
     "Git operation in progress" : {
       "localizations" : {
         "ja" : {
@@ -3120,22 +3102,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法获取 Git 状态"
-          }
-        }
-      }
-    },
-    "Toolbar" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ツールバー"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "工具栏"
           }
         }
       }
@@ -3365,9 +3331,6 @@
         }
       }
     },
-    "kero" : {
-      "shouldTranslate" : false
-    },
     "Keeps the toolbar hidden" : {
       "localizations" : {
         "ja" : {
@@ -3383,6 +3346,9 @@
           }
         }
       }
+    },
+    "kero" : {
+      "shouldTranslate" : false
     },
     "Kero did not provide any %@ themes." : {
       "localizations" : {
@@ -4025,6 +3991,9 @@
           }
         }
       }
+    },
+    "No changed files" : {
+
     },
     "No changed files match “%@”" : {
       "localizations" : {
@@ -5804,6 +5773,41 @@
         }
       }
     },
+    "Shows files changed in this commit" : {
+
+    },
+    "Shows the toolbar in every project" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのプロジェクトでツールバーを表示します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在所有项目中显示工具栏"
+          }
+        }
+      }
+    },
+    "Shows the toolbar only in Git repositories" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gitリポジトリでのみツールバーを表示します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在 Git 仓库中显示工具栏"
+          }
+        }
+      }
+    },
     "Sidebar" : {
       "localizations" : {
         "ja" : {
@@ -6716,6 +6720,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示/隐藏右侧边栏（⇧⌘B）"
+          }
+        }
+      }
+    },
+    "Toolbar" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツールバー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具栏"
           }
         }
       }

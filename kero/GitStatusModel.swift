@@ -4,6 +4,7 @@
 //
 
 import Combine
+import Darwin
 import Dispatch
 import Foundation
 
@@ -76,12 +77,30 @@ final class GitStatusModel: nonisolated ObservableObject {
     }
 
     nonisolated struct RecentCommit: Identifiable, Equatable, Sendable {
+        nonisolated struct FileChange: Identifiable, Equatable, Sendable {
+            let status: Character
+            let path: String
+            let originalPath: String?
+
+            var id: String {
+                "\(status)\u{0}\(originalPath ?? "")\u{0}\(path)"
+            }
+            var fileName: String { (path as NSString).lastPathComponent }
+            var directory: String {
+                let dir = (path as NSString).deletingLastPathComponent
+                return dir.isEmpty ? "" : dir
+            }
+        }
+
         var id: String { hash }
         let hash: String
         let shortHash: String
         let subject: String
         let author: String
         let date: Date
+        let parentHash: String?
+        let references: [String]
+        let files: [FileChange]
 
         var relativeDate: String {
             date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
@@ -142,6 +161,8 @@ final class GitStatusModel: nonisolated ObservableObject {
     @Published private(set) var defaultBranch: String?
     @Published private(set) var remotes: [String] = []
     @Published private(set) var recentCommits: [RecentCommit] = []
+    @Published private(set) var hasMoreRecentCommits = false
+    @Published private(set) var isLoadingMoreCommits = false
     @Published private(set) var repositoryOperation: String?
     @Published private(set) var stashCount = 0
     @Published private(set) var isRefreshing = false
@@ -172,6 +193,9 @@ final class GitStatusModel: nonisolated ObservableObject {
     /// running. Without polling, dropping that event could leave the snapshot
     /// stale indefinitely.
     private var refreshPending = false
+    private static let recentCommitPageSize = 8
+    private var recentCommitLimit = recentCommitPageSize
+    private var recentCommitLimitByRoot: [String: Int] = [:]
     /// Keeps a mutation globally exclusive even if the terminal changes cwd
     /// while its Git process is still running.
     private var runningOperationID: UUID?
@@ -240,6 +264,8 @@ final class GitStatusModel: nonisolated ObservableObject {
         if root != rootPath {
             contextGeneration &+= 1
             rootPath = root
+            recentCommitLimit = recentCommitLimitByRoot[root]
+                ?? Self.recentCommitPageSize
             hasResolvedStatus = false
             clearRepositoryState(preserveIdentity: true)
             if let cachedStatus = cachedStatusByRoot[root] {
@@ -253,6 +279,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     func refresh() {
         let root = rootPath
         let generation = contextGeneration
+        let commitLimit = recentCommitLimit
         guard !root.isEmpty else { return }
         guard !isRefreshing, !isBusy else {
             refreshPending = true
@@ -263,14 +290,37 @@ final class GitStatusModel: nonisolated ObservableObject {
         let requestID = statusRequestID
         isRefreshing = true
 
+        // This is deliberately independent of the worker. Even filesystem
+        // metadata calls can become uninterruptible on a disconnected volume;
+        // the sidebar must still leave its initial loading state and offer a
+        // retry while the stale worker winds down in the background.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard let self,
+                  self.isRefreshing,
+                  self.contextGeneration == generation,
+                  self.statusRequestID == requestID,
+                  self.rootPath == root else { return }
+            self.statusRequestID &+= 1
+            self.isRefreshing = false
+            self.isLoadingMoreCommits = false
+            self.refreshPending = false
+            self.apply(.failed(String(localized: "Git did not respond in time.")))
+            self.hasResolvedStatus = true
+        }
+
         Task { [weak self] in
             let result = await Task.detached(priority: .utility) {
-                Self.runGitStatus(in: root)
+                Self.runGitStatus(in: root, recentCommitLimit: commitLimit)
             }.value
             guard let self, self.contextGeneration == generation,
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
             self.isRefreshing = false
+            // A pagination request may have arrived while this older snapshot
+            // was already running. Keep its loading state latched until the
+            // queued refresh using the larger limit finishes.
+            self.isLoadingMoreCommits = commitLimit < self.recentCommitLimit
             switch result {
             case .repository, .notRepository:
                 self.cachedStatusByRoot[root] = result
@@ -284,6 +334,24 @@ final class GitStatusModel: nonisolated ObservableObject {
                 self.refresh()
             }
         }
+    }
+
+    @discardableResult
+    func loadMoreCommits() -> Bool {
+        guard isRepo, hasMoreRecentCommits,
+              !isLoadingMoreCommits, !isBusy else { return false }
+        recentCommitLimit += Self.recentCommitPageSize
+        recentCommitLimitByRoot[rootPath] = recentCommitLimit
+        isLoadingMoreCommits = true
+        if isRefreshing {
+            // The active worker captured the previous limit. Queue a second
+            // refresh instead of dropping the request made as the section is
+            // opened near the end of the viewport.
+            refreshPending = true
+        } else {
+            refresh()
+        }
+        return true
     }
 
     func dismissOperation() {
@@ -893,6 +961,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     private func invalidateStatusRefresh() {
         statusRequestID &+= 1
         isRefreshing = false
+        isLoadingMoreCommits = false
         refreshPending = false
     }
 
@@ -936,6 +1005,8 @@ final class GitStatusModel: nonisolated ObservableObject {
         defaultBranch = nil
         remotes = []
         recentCommits = []
+        hasMoreRecentCommits = false
+        isLoadingMoreCommits = false
         repositoryOperation = nil
         stashCount = 0
         isRefreshing = false
@@ -999,6 +1070,7 @@ final class GitStatusModel: nonisolated ObservableObject {
             defaultBranch = result.defaultBranch
             remotes = result.remotes
             recentCommits = result.recentCommits
+            hasMoreRecentCommits = result.hasMoreRecentCommits
             repositoryOperation = result.repositoryOperation
             stashCount = result.stashCount
         }
@@ -1043,15 +1115,18 @@ final class GitStatusModel: nonisolated ObservableObject {
         var defaultBranch: String?
         var remotes: [String] = []
         var recentCommits: [RecentCommit] = []
+        var hasMoreRecentCommits = false
         var repositoryOperation: String?
         var stashCount = 0
         var loadedDetails = false
     }
 
-    /// Runs Git while draining stdout and stderr concurrently. Reading either
-    /// pipe only after the process exits can deadlock when the other fills.
+    /// Runs Git while draining stdout and stderr concurrently. Dedicated
+    /// reader threads are intentional: several restored diff tabs can call
+    /// this from Swift's cooperative executor at once, and dispatching the
+    /// readers back onto the shared pool can starve every pipe drain.
     nonisolated static func runGit(
-        _ args: [String], in dir: String
+        _ args: [String], in dir: String, timeout: TimeInterval? = nil
     ) -> (status: Int32, stdout: String, stderr: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -1072,6 +1147,8 @@ final class GitStatusModel: nonisolated ObservableObject {
         process.standardOutput = stdout
         process.standardError = stderr
         process.standardInput = FileHandle.nullDevice
+        let processExited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in processExited.signal() }
 
         do {
             try process.run()
@@ -1082,28 +1159,73 @@ final class GitStatusModel: nonisolated ObservableObject {
         let errData = PipeData()
         let readers = DispatchGroup()
         readers.enter()
-        DispatchQueue.global(qos: .utility).async {
+        let stdoutReader = Thread {
             outData.value = stdout.fileHandleForReading.readDataToEndOfFile()
             readers.leave()
         }
+        stdoutReader.qualityOfService = .utility
+        stdoutReader.start()
         readers.enter()
-        DispatchQueue.global(qos: .utility).async {
+        let stderrReader = Thread {
             errData.value = stderr.fileHandleForReading.readDataToEndOfFile()
             readers.leave()
         }
-        process.waitUntilExit()
+        stderrReader.qualityOfService = .utility
+        stderrReader.start()
+        var timedOut = false
+        if let timeout {
+            timedOut = processExited.wait(timeout: .now() + timeout) == .timedOut
+            if timedOut {
+                process.terminate()
+                if processExited.wait(timeout: .now() + 1) == .timedOut {
+                    // Git can launch a helper that ignores SIGTERM. It is our
+                    // child, so force it down before waiting for pipe EOF.
+                    Darwin.kill(process.processIdentifier, SIGKILL)
+                    process.waitUntilExit()
+                }
+            }
+        } else {
+            process.waitUntilExit()
+        }
         readers.wait()
+        let output = String(data: outData.value, encoding: .utf8) ?? ""
+        var errorOutput = String(data: errData.value, encoding: .utf8) ?? ""
+        if timedOut {
+            let timeoutMessage = String(localized: "Git did not respond in time.")
+            if !errorOutput.isEmpty, !errorOutput.hasSuffix("\n") {
+                errorOutput += "\n"
+            }
+            errorOutput += timeoutMessage
+            return (-2, output, errorOutput)
+        }
         return (
             process.terminationStatus,
-            String(data: outData.value, encoding: .utf8) ?? "",
-            String(data: errData.value, encoding: .utf8) ?? ""
+            output,
+            errorOutput
         )
     }
 
     /// Resolves the active repository and distinguishes a normal non-repo
     /// directory from an actual Git failure that the UI should surface.
-    private nonisolated static func runGitStatus(in root: String) -> StatusLoadResult {
-        let top = runGit(["rev-parse", "--show-toplevel"], in: root)
+    private nonisolated static func runGitStatus(
+        in root: String,
+        recentCommitLimit: Int
+    ) -> StatusLoadResult {
+        // A filesystem, Git helper, or corrupt repository must not leave the
+        // initial sidebar spinner running forever. Share one deadline across
+        // the full snapshot instead of allowing every detail command its own
+        // timeout.
+        let deadline = Date().addingTimeInterval(10)
+        let timeoutMessage = String(localized: "Git did not respond in time.")
+        func statusGit(
+            _ args: [String], in directory: String
+        ) -> (status: Int32, stdout: String, stderr: String) {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return (-2, "", timeoutMessage) }
+            return runGit(args, in: directory, timeout: remaining)
+        }
+
+        let top = statusGit(["rev-parse", "--show-toplevel"], in: root)
         guard top.status == 0 else {
             let failure = gitFailureMessage(
                 top,
@@ -1120,7 +1242,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         guard !resolvedRoot.isEmpty else {
             return .failed(String(localized: "Git returned an empty repository path."))
         }
-        let status = runGit(
+        let status = statusGit(
             [
                 "status", "--porcelain=v2", "--branch", "-z",
                 "--untracked-files=all", "--ignored=matching",
@@ -1138,7 +1260,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         var result = parseStatus(status.stdout)
         result.topLevel = resolvedRoot
 
-        let diff = runGit(
+        let diff = statusGit(
             result.hasHead
                 ? ["diff", "--numstat", "HEAD", "--"]
                 : ["diff", "--numstat", "--cached", "--"],
@@ -1153,7 +1275,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         // the initial snapshot; add any edits made after staging as a second
         // layer so the toolbar still reflects all pending work.
         if !result.hasHead {
-            let unstaged = runGit(["diff", "--numstat", "--"], in: resolvedRoot)
+            let unstaged = statusGit(["diff", "--numstat", "--"], in: resolvedRoot)
             if unstaged.status == 0 {
                 let totals = parseNumstat(unstaged.stdout)
                 result.lineAdditions += totals.additions
@@ -1171,14 +1293,14 @@ final class GitStatusModel: nonisolated ObservableObject {
         result.loadedDetails = true
         let repoRoot = resolvedRoot
 
-        let refs = runGit(
+        let refs = statusGit(
             ["for-each-ref", "--format=%(refname:short)", "refs/heads"], in: repoRoot
         )
         if refs.status == 0 {
             result.branches = refs.stdout.split(separator: "\n").map(String.init).sorted()
         }
 
-        let remoteRun = runGit(["remote"], in: repoRoot)
+        let remoteRun = statusGit(["remote"], in: repoRoot)
         if remoteRun.status == 0 {
             result.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
         }
@@ -1187,7 +1309,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         // Prefer origin when more than one remote is present because that is
         // the repository the local branch list conventionally belongs to.
         if let remote = result.remotes.contains("origin") ? "origin" : result.remotes.first {
-            let remoteHead = runGit(
+            let remoteHead = statusGit(
                 ["symbolic-ref", "--quiet", "--short", "refs/remotes/\(remote)/HEAD"],
                 in: repoRoot
             )
@@ -1201,18 +1323,27 @@ final class GitStatusModel: nonisolated ObservableObject {
             }
         }
 
-        let log = runGit(
-            ["log", "-n", "8", "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1e"],
-            in: repoRoot
-        )
-        if log.status == 0 { result.recentCommits = parseRecentCommits(log.stdout) }
+        // NUL-delimited name-status records preserve every valid path while
+        // supplying the nested file rows used by the native commit graph.
+        let log = statusGit([
+            "log", "-n", "\(recentCommitLimit + 1)", "--decorate=short",
+            "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%D",
+            "--name-status", "-z",
+        ], in: repoRoot)
+        if log.status == 0 {
+            let commits = parseRecentCommits(log.stdout)
+            result.hasMoreRecentCommits = commits.count > recentCommitLimit
+            result.recentCommits = Array(commits.prefix(recentCommitLimit))
+        }
 
-        let stash = runGit(["rev-list", "--walk-reflogs", "--count", "refs/stash"], in: repoRoot)
+        let stash = statusGit(
+            ["rev-list", "--walk-reflogs", "--count", "refs/stash"], in: repoRoot
+        )
         if stash.status == 0 {
             result.stashCount = Int(stash.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         }
 
-        let gitDir = runGit(["rev-parse", "--absolute-git-dir"], in: repoRoot)
+        let gitDir = statusGit(["rev-parse", "--absolute-git-dir"], in: repoRoot)
         if gitDir.status == 0 {
             let path = strippingTrailingLineEnding(gitDir.stdout)
             result.repositoryOperation = detectRepositoryOperation(gitDirectory: path)
@@ -1346,29 +1477,49 @@ final class GitStatusModel: nonisolated ObservableObject {
         let rootURL = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL
         let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
 
-        return entries.lazy
-            .filter { $0.staged == "?" }
-            .reduce(into: 0) { total, entry in
-                let fileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
-                guard fileURL.path.hasPrefix(rootPrefix) else { return }
-                total += textLineCount(at: fileURL)
-            }
+        // Line totals are secondary metadata. Keep generated or accidentally
+        // enormous untracked trees from delaying the repository itself.
+        let maximumFiles = 2_048
+        let maximumFileBytes = 8 * 1_024 * 1_024
+        var remainingBytes = 32 * 1_024 * 1_024
+        var visitedFiles = 0
+        var total = 0
+        for entry in entries where entry.staged == "?" {
+            guard visitedFiles < maximumFiles, remainingBytes > 0 else { break }
+            visitedFiles += 1
+            let fileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
+            guard fileURL.path.hasPrefix(rootPrefix) else { continue }
+            let count = textLineCount(
+                at: fileURL,
+                maximumBytes: min(maximumFileBytes, remainingBytes)
+            )
+            total += count.lines
+            remainingBytes -= count.bytesRead
+        }
+        return total
     }
 
     /// Counts logical lines while using Git's usual NUL-byte binary heuristic.
     /// Symlink content is its destination path, which is one added line.
-    private nonisolated static func textLineCount(at url: URL) -> Int {
+    private nonisolated static func textLineCount(
+        at url: URL,
+        maximumBytes: Int
+    ) -> (lines: Int, bytesRead: Int) {
         guard let values = try? url.resourceValues(
-            forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
-        ) else { return 0 }
-        if values.isSymbolicLink == true { return 1 }
+            forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
+        ) else { return (0, 0) }
+        if values.isSymbolicLink == true { return (1, 0) }
         guard values.isRegularFile == true,
-              let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+              let fileSize = values.fileSize,
+              fileSize <= maximumBytes,
+              let handle = try? FileHandle(forReadingFrom: url) else { return (0, 0) }
         defer { try? handle.close() }
 
         let binaryProbeSize = 8_000
-        guard let probe = try? handle.read(upToCount: binaryProbeSize),
-              !probe.contains(0) else { return 0 }
+        guard let probe = try? handle.read(upToCount: binaryProbeSize) else {
+            return (0, 0)
+        }
+        guard !probe.contains(0) else { return (0, probe.count) }
 
         var byteCount = probe.count
         var newlineCount = probe.reduce(into: 0) { count, byte in
@@ -1384,8 +1535,8 @@ final class GitStatusModel: nonisolated ObservableObject {
             lastByte = chunk.last
         }
 
-        guard byteCount > 0 else { return 0 }
-        return newlineCount + (lastByte == 0x0A ? 0 : 1)
+        guard byteCount > 0 else { return (0, 0) }
+        return (newlineCount + (lastByte == 0x0A ? 0 : 1), byteCount)
     }
 
     private static func fileDecoration(for entry: Entry) -> FileDecoration {
@@ -1401,15 +1552,64 @@ final class GitStatusModel: nonisolated ObservableObject {
 
     nonisolated static func parseRecentCommits(_ output: String) -> [RecentCommit] {
         output.split(separator: "\u{1e}").compactMap { record in
-            let clean = record.trimmingCharacters(in: .newlines)
-            let fields = clean.split(separator: "\u{1f}", omittingEmptySubsequences: false)
-            guard fields.count == 5, let timestamp = TimeInterval(fields[4]) else {
+            var chunks = record.split(separator: "\u{0}", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard !chunks.isEmpty else { return nil }
+
+            // With --name-status -z, the first status follows the pretty
+            // header after a newline; subsequent statuses are their own NUL
+            // fields. Rename/copy records carry both old and new paths.
+            let headerAndStatus = chunks.removeFirst()
+            let boundary = headerAndStatus.lastIndex(of: "\n")
+            let header = boundary.map { String(headerAndStatus[..<$0]) } ?? headerAndStatus
+            var statusToken = boundary.map {
+                String(headerAndStatus[headerAndStatus.index(after: $0)...])
+            } ?? ""
+            let fields = header.split(separator: "\u{1f}", omittingEmptySubsequences: false)
+            guard fields.count == 7, let timestamp = TimeInterval(fields[4]) else {
                 return nil
             }
+
+            var files: [RecentCommit.FileChange] = []
+            var index = 0
+            while !statusToken.isEmpty, index < chunks.count {
+                guard let status = statusToken.first else { break }
+                if status == "R" || status == "C" {
+                    guard index + 1 < chunks.count else { break }
+                    files.append(.init(
+                        status: status,
+                        path: chunks[index + 1],
+                        originalPath: chunks[index]
+                    ))
+                    index += 2
+                } else {
+                    files.append(.init(
+                        status: status,
+                        path: chunks[index],
+                        originalPath: nil
+                    ))
+                    index += 1
+                }
+                guard index < chunks.count else { break }
+                statusToken = chunks[index]
+                index += 1
+            }
+
+            let parentHash = fields[5]
+                .split(separator: " ")
+                .first
+                .map(String.init)
+            let references = fields[6]
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
             return RecentCommit(
                 hash: String(fields[0]), shortHash: String(fields[1]),
                 subject: String(fields[2]), author: String(fields[3]),
-                date: Date(timeIntervalSince1970: timestamp)
+                date: Date(timeIntervalSince1970: timestamp),
+                parentHash: parentHash,
+                references: references,
+                files: files
             )
         }
     }

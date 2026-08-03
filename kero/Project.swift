@@ -444,7 +444,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     func openDiff(
         repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?
     ) {
-        if let (tab, pane) = findDiffPane(repoRoot: repoRoot, path: path, staged: staged),
+        if let (tab, pane) = findDiffPane(
+            repoRoot: repoRoot, path: path, staged: staged, commitHash: nil
+        ),
            case .diff(let diff) = pane.content {
             diff.untracked = untracked
             diff.origPath = origPath
@@ -464,13 +466,52 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         selectedTabID = tab.id
     }
 
+    /// Opens one file as it changed in a historical commit, comparing the
+    /// commit's first parent with the selected commit.
+    func openCommitDiff(
+        repoRoot: String,
+        path: String,
+        commitHash: String,
+        parentHash: String?,
+        status: Character,
+        origPath: String?
+    ) {
+        if let (tab, pane) = findDiffPane(
+            repoRoot: repoRoot, path: path, staged: false, commitHash: commitHash
+        ), case .diff(let diff) = pane.content {
+            diff.origPath = origPath
+            diff.reload()
+            selectedTabID = tab.id
+            tab.focusedPaneID = pane.id
+            return
+        }
+        let context = selectedSession
+        let diff = DiffTab(
+            repoRoot: repoRoot,
+            path: path,
+            staged: false,
+            untracked: false,
+            origPath: origPath,
+            commitHash: commitHash,
+            commitParentHash: parentHash,
+            commitStatus: status
+        )
+        let tab = makeTab(content: .diff(diff))
+        tab.contextSession = context
+        insertNextToSelected(tab)
+        selectedTabID = tab.id
+    }
+
     private func findDiffPane(
-        repoRoot: String, path: String, staged: Bool
+        repoRoot: String, path: String, staged: Bool, commitHash: String?
     ) -> (tab: PaneTab, pane: Pane)? {
         for tab in tabs {
             if let pane = tab.allPanes.first(where: {
                 if case .diff(let diff) = $0.content {
-                    return diff.repoRoot == repoRoot && diff.path == path && diff.staged == staged
+                    return diff.repoRoot == repoRoot
+                        && diff.path == path
+                        && diff.staged == staged
+                        && diff.commitHash == commitHash
                 }
                 return false
             }) {
@@ -731,6 +772,19 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             return .diff(DiffTab(
                 repoRoot: repoRoot, path: path, staged: staged,
                 untracked: untracked, origPath: origPath
+            ))
+        case .commitDiff(
+            let repoRoot, let path, let commitHash, let parentHash, let status, let origPath
+        ):
+            return .diff(DiffTab(
+                repoRoot: repoRoot,
+                path: path,
+                staged: false,
+                untracked: false,
+                origPath: origPath,
+                commitHash: commitHash,
+                commitParentHash: parentHash,
+                commitStatus: status.first
             ))
         }
     }

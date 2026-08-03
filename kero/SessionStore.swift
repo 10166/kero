@@ -21,6 +21,14 @@ struct SessionSnapshot: Codable {
             case file(path: String, editorState: EditorState?)
             case browser(url: String?)
             case diff(repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?)
+            case commitDiff(
+                repoRoot: String,
+                path: String,
+                commitHash: String,
+                parentHash: String?,
+                status: String,
+                origPath: String?
+            )
         }
 
         struct PaneSnapshot: Codable {

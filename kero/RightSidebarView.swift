@@ -82,6 +82,16 @@ struct RightSidebarView: View {
                                     untracked: entry.isUntracked,
                                     origPath: entry.origPath
                                 )
+                            },
+                            openCommitDiff: { commit, file in
+                                manager.openCommitDiff(
+                                    repoRoot: git.repoRoot,
+                                    path: file.path,
+                                    commitHash: commit.hash,
+                                    parentHash: commit.parentHash,
+                                    status: file.status,
+                                    origPath: file.originalPath
+                                )
                             }
                         )
                     case .info:
@@ -656,6 +666,10 @@ private struct GitPanel: View {
     let openFile: (String) -> Void
     let openToSide: (String) -> Void
     let openDiff: (_ entry: GitStatusModel.Entry, _ staged: Bool) -> Void
+    let openCommitDiff: (
+        _ commit: GitStatusModel.RecentCommit,
+        _ file: GitStatusModel.RecentCommit.FileChange
+    ) -> Void
 
     @State private var commitMessage = ""
     @State private var pendingDiscard: PendingDiscard?
@@ -664,13 +678,15 @@ private struct GitPanel: View {
     @State private var mergeCollapsed = false
     @State private var stagedCollapsed = false
     @State private var changesCollapsed = false
-    @State private var historyCollapsed = true
+    @State private var historyCollapsed = false
+    @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
     @State private var showFilter = false
     @State private var showBranchCreator = false
     @State private var newBranchName = ""
     @State private var operationExpanded = false
     @FocusState private var branchFieldFocused: Bool
+    @Environment(\.sidebarFontScale) private var sidebarFontScale
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1434,9 +1450,16 @@ private struct GitPanel: View {
                         actionsDisabled: model.isBusy
                     )
                     if !historyCollapsed {
-                        ForEach(model.recentCommits) { commit in
-                            GitCommitRow(commit: commit)
-                        }
+                        RecentCommitsView(
+                            commits: model.recentCommits,
+                            expandedCommitIDs: $expandedCommitIDs,
+                            fontScale: sidebarFontScale,
+                            hasMoreCommits: model.hasMoreRecentCommits,
+                            isLoadingMore: model.isLoadingMoreCommits,
+                            loadMore: model.loadMoreCommits,
+                            openDiff: openCommitDiff
+                        )
+                        .frame(maxWidth: .infinity)
                     }
                 }
             }
@@ -1726,7 +1749,8 @@ private struct GitPanel: View {
         mergeCollapsed = false
         stagedCollapsed = false
         changesCollapsed = false
-        historyCollapsed = true
+        historyCollapsed = false
+        expandedCommitIDs.removeAll()
     }
 
     private func shellQuoted(_ path: String) -> String {
@@ -1834,47 +1858,6 @@ private struct GitSectionHeader: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title), \(count) items")
         .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
-    }
-}
-
-private struct GitCommitRow: View {
-    @ObservedObject private var themeChanges = Theme.changes
-    let commit: GitStatusModel.RecentCommit
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(commit.subject)
-                .sidebarFont(size: 11)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            HStack(spacing: 4) {
-                Text(commit.shortHash)
-                    .sidebarFont(size: 9.5, design: .monospaced)
-                    .foregroundStyle(Color(nsColor: Theme.accent).opacity(0.85))
-                Text("·")
-                Text(commit.author)
-                Text("·")
-                Text(commit.relativeDate)
-            }
-            .sidebarFont(size: 9.5)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button("Copy Commit Hash") { copy(commit.hash) }
-            Button("Copy Commit Message") { copy(commit.subject) }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(commit.subject), \(commit.shortHash), by \(commit.author), \(commit.relativeDate)")
-    }
-
-    private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
