@@ -47,7 +47,7 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
             guard !isRequestingAuthorization else { return }
 
             isRequestingAuthorization = true
-            center.requestAuthorization(options: [.alert]) { [weak self] granted, error in
+            center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.isRequestingAuthorization = false
@@ -74,6 +74,7 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
         let content = UNMutableNotificationContent()
         content.title = "Kero"
         content.body = message
+        content.sound = .default
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -92,6 +93,6 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner])
+        completionHandler([.banner, .sound])
     }
 }
