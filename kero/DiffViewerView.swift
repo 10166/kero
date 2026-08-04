@@ -17,27 +17,37 @@ private nonisolated final class DiffPipeData: @unchecked Sendable {
 
 /// Lightweight UI state that should follow Kero across launches without
 /// becoming a user-facing TOML setting.
-private enum DiffViewPreferences {
+@MainActor
+private final class DiffViewPreferences: ObservableObject {
+    static let shared = DiffViewPreferences()
+
     private static let layoutKey = "diffView.layout"
     private static let modeKey = "diffView.mode"
 
-    static var diffStyle: DiffStyle {
-        get {
-            guard let rawValue = UserDefaults.standard.string(forKey: layoutKey),
-                  let style = DiffStyle(rawValue: rawValue)
-            else { return .unified }
-            return style
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: layoutKey)
+    @Published var diffStyle: DiffStyle {
+        didSet {
+            UserDefaults.standard.set(diffStyle.rawValue, forKey: Self.layoutKey)
         }
     }
 
-    static var prefersEditing: Bool {
-        get { UserDefaults.standard.string(forKey: modeKey) == "edit" }
-        set {
-            UserDefaults.standard.set(newValue ? "edit" : "review", forKey: modeKey)
+    @Published var prefersEditing: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                prefersEditing ? "edit" : "review",
+                forKey: Self.modeKey
+            )
         }
+    }
+
+    private init() {
+        let defaults = UserDefaults.standard
+        if let rawValue = defaults.string(forKey: Self.layoutKey),
+           let style = DiffStyle(rawValue: rawValue) {
+            diffStyle = style
+        } else {
+            diffStyle = .unified
+        }
+        prefersEditing = defaults.string(forKey: Self.modeKey) == "edit"
     }
 }
 
@@ -50,9 +60,8 @@ final class DiffWebModel: nonisolated ObservableObject {
     @Published var newContent = ""
     @Published var fileName = ""
     @Published var fileID = ""
-    @Published var diffStyle: DiffStyle = DiffViewPreferences.diffStyle
+    @Published var canEdit = false
     @Published var overflowMode: OverflowMode = .scroll
-    @Published var isEditing = false
     var onFileEditChange: ((String, String) -> Void)?
     var onFileEditComplete: ((String, String) -> Void)?
     /// The WKWebView renders blank until its JS bundle has drawn the diff;
@@ -163,7 +172,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     func reload() {
         // Keep the editor's document and undo history stable until the user
         // leaves edit mode, and never replace an unsaved buffer from disk.
-        guard !web.isEditing, !isDirty else { return }
+        guard !isEditing, !isDirty else { return }
         reloadGeneration &+= 1
         let generation = reloadGeneration
         isLoading = true
@@ -226,7 +235,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
             self.error = result.failure
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
-            self.web.isEditing = self.isEditable && DiffViewPreferences.prefersEditing
+            self.web.canEdit = self.isEditable
             self.web.oldContent = result.old
             self.web.newContent = result.new
             self.savedNewContent = result.new
@@ -278,14 +287,16 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     func setDiffStyle(_ style: DiffStyle) {
-        web.diffStyle = style
-        DiffViewPreferences.diffStyle = style
+        DiffViewPreferences.shared.diffStyle = style
     }
 
     func setEditing(_ isEditing: Bool) {
         guard isEditable else { return }
-        web.isEditing = isEditing
-        DiffViewPreferences.prefersEditing = isEditing
+        DiffViewPreferences.shared.prefersEditing = isEditing
+    }
+
+    private var isEditing: Bool {
+        isEditable && DiffViewPreferences.shared.prefersEditing
     }
 
     func save() {
@@ -551,6 +562,7 @@ private enum DiffFont {
 private struct DiffWebRoot: View {
     @ObservedObject var model: DiffWebModel
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var preferences = DiffViewPreferences.shared
 
     var body: some View {
         PierreMultiDiffView(
@@ -560,10 +572,10 @@ private struct DiffWebRoot: View {
                     name: model.fileName,
                     oldContents: model.oldContent,
                     newContents: model.newContent,
-                    isEditable: model.isEditing
+                    isEditable: model.canEdit && preferences.prefersEditing
                 )
             ],
-            diffStyle: $model.diffStyle,
+            diffStyle: $preferences.diffStyle,
             overflowMode: $model.overflowMode,
             renderOptions: DiffFont.renderOptions(
                 family: settings.fontFamily, size: settings.fontSize
@@ -618,6 +630,7 @@ struct DiffViewerView: View {
     @ObservedObject var diff: DiffTab
     @ObservedObject private var themeChanges = Theme.changes
     @ObservedObject private var web: DiffWebModel
+    @ObservedObject private var preferences = DiffViewPreferences.shared
     /// The view stays mounted while other tabs are selected (see
     /// ContentView); this flags when it is the frontmost tab so content
     /// refreshes on each re-visit, not just on first mount.
@@ -715,11 +728,11 @@ struct DiffViewerView: View {
     private var controlBar: some View {
         DiffControlsBar(
             diffStyle: Binding(
-                get: { web.diffStyle },
+                get: { preferences.diffStyle },
                 set: { diff.setDiffStyle($0) }
             ),
             isEditing: Binding(
-                get: { web.isEditing },
+                get: { diff.isEditable && preferences.prefersEditing },
                 set: { diff.setEditing($0) }
             ),
             canEdit: diff.isEditable
