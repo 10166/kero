@@ -1133,16 +1133,14 @@ private struct PaneTabItem: View {
             case .browser(let browser):
                 BrowserTabLabel(browser: browser, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
             case .diff(let diff):
-                TabItemChrome(
-                    systemImage: "plus.forwardslash.minus",
-                    fileIconPath: diff.path,
-                    title: tab.customName ?? diff.title,
+                DiffTabLabel(
+                    diff: diff,
+                    customTitle: tab.customName,
                     paneCount: paneCount,
                     isSelected: isSelected,
                     select: select,
                     close: close
                 )
-                .help(diff.path)
             case nil:
                 EmptyView()
             }
@@ -1304,6 +1302,29 @@ private struct BrowserTabLabel: View {
             close: close
         )
         .help(browser.urlString)
+    }
+}
+
+private struct DiffTabLabel: View {
+    @ObservedObject var diff: DiffTab
+    var customTitle: String?
+    let paneCount: Int
+    let isSelected: Bool
+    let select: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        TabItemChrome(
+            systemImage: "plus.forwardslash.minus",
+            fileIconPath: diff.path,
+            title: customTitle ?? diff.title,
+            paneCount: paneCount,
+            isSelected: isSelected,
+            isDirty: diff.isDirty,
+            select: select,
+            close: close
+        )
+        .help(diff.path)
     }
 }
 

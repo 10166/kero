@@ -539,12 +539,19 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             }
             let window = NSApp.keyWindow ?? NSApp.mainWindow
             Task { @MainActor in
-                _ = await confirmCloseUnsaved(file, in: window)
+                _ = await confirmCloseUnsaved(content, in: window)
             }
         case .browser:
             removePaneWithContent(content.id)
-        case .diff:
-            removePaneWithContent(content.id)
+        case .diff(let diff):
+            guard diff.isDirty else {
+                removePaneWithContent(content.id)
+                return
+            }
+            let window = NSApp.keyWindow ?? NSApp.mainWindow
+            Task { @MainActor in
+                _ = await confirmCloseUnsaved(content, in: window)
+            }
         }
     }
 
@@ -599,12 +606,12 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// This is `async` on purpose: awaiting the sheet means each prompt in a
     /// batch is presented only after the previous one has fully dismissed.
     @discardableResult
-    private func confirmCloseUnsaved(_ file: FileTab, in window: NSWindow?) async -> Bool {
+    private func confirmCloseUnsaved(_ content: PaneContent, in window: NSWindow?) async -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = String(
-            localized: "Do you want to save the changes you made to \(file.name)?",
-            comment: "Unsaved file confirmation. The placeholder is a file name."
+            localized: "Do you want to save the changes you made to \(content.title)?",
+            comment: "Unsaved file or diff confirmation. The placeholder is a file name."
         )
         alert.informativeText = String(localized: "Your changes will be lost if you don't save them.")
         alert.addButton(withTitle: String(localized: "Save"))
@@ -623,13 +630,13 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
         switch response {
         case .alertFirstButtonReturn: // Save
-            file.save()
+            content.save()
             // Keep the pane open if the write failed; the error bar shows why.
-            guard file.saveError == nil else { return true }
-            removePaneWithContent(file.id)
+            guard content.saveError == nil else { return true }
+            removePaneWithContent(content.id)
             return false
         case .alertSecondButtonReturn: // Don't Save
-            removePaneWithContent(file.id)
+            removePaneWithContent(content.id)
             return false
         default: // Cancel
             return true
@@ -641,26 +648,20 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// is only torn down once every prompt has been answered — so cancelling
     /// out of a save prompt leaves the saved panes open too.
     private func closeBatch(_ targets: [PaneContent]) {
-        let dirtyFiles = targets.compactMap { content -> FileTab? in
-            if case .file(let file) = content, file.isDirty { return file }
-            return nil
-        }
-        let cleanContents = targets.filter { content in
-            if case .file(let file) = content { return !file.isDirty }
-            return true
-        }
+        let dirtyContents = targets.filter(\.isDirty)
+        let cleanContents = targets.filter { !$0.isDirty }
 
-        guard !dirtyFiles.isEmpty else {
+        guard !dirtyContents.isEmpty else {
             cleanContents.forEach { closeContent($0) }
             return
         }
 
         let window = NSApp.keyWindow ?? NSApp.mainWindow
         Task { @MainActor in
-            for file in dirtyFiles where file.isDirty {
+            for content in dirtyContents where content.isDirty {
                 // Bail the moment the user backs out — the clean panes, and any
-                // files not yet prompted, stay open.
-                if await confirmCloseUnsaved(file, in: window) { return }
+                // unsaved panes not yet prompted, stay open.
+                if await confirmCloseUnsaved(content, in: window) { return }
             }
             cleanContents.forEach { closeContent($0) }
         }

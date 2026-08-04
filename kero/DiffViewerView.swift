@@ -15,16 +15,46 @@ private nonisolated final class DiffPipeData: @unchecked Sendable {
     var value = Data()
 }
 
+/// Lightweight UI state that should follow Kero across launches without
+/// becoming a user-facing TOML setting.
+private enum DiffViewPreferences {
+    private static let layoutKey = "diffView.layout"
+    private static let modeKey = "diffView.mode"
+
+    static var diffStyle: DiffStyle {
+        get {
+            guard let rawValue = UserDefaults.standard.string(forKey: layoutKey),
+                  let style = DiffStyle(rawValue: rawValue)
+            else { return .unified }
+            return style
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: layoutKey)
+        }
+    }
+
+    static var prefersEditing: Bool {
+        get { UserDefaults.standard.string(forKey: modeKey) == "edit" }
+        set {
+            UserDefaults.standard.set(newValue ? "edit" : "review", forKey: modeKey)
+        }
+    }
+}
+
 /// Observable inputs for a diff tab's web view. Owned by `DiffTab` and also
-/// retained by the tab's long-lived hosting view, so it must never reference
-/// the `DiffTab` back (that would leak the tab through a retain cycle).
+/// retained by the tab's long-lived hosting view. Its edit callbacks capture
+/// the owning `DiffTab` weakly so that view retention cannot leak the tab.
 @MainActor
 final class DiffWebModel: nonisolated ObservableObject {
     @Published var oldContent = ""
     @Published var newContent = ""
     @Published var fileName = ""
-    @Published var diffStyle: DiffStyle = .unified
+    @Published var fileID = ""
+    @Published var diffStyle: DiffStyle = DiffViewPreferences.diffStyle
     @Published var overflowMode: OverflowMode = .scroll
+    @Published var isEditing = false
+    var onFileEditChange: ((String, String) -> Void)?
+    var onFileEditComplete: ((String, String) -> Void)?
     /// The WKWebView renders blank until its JS bundle has drawn the diff;
     /// a skeleton covers it until the bridge reports ready.
     @Published var isReady = false
@@ -58,6 +88,9 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     @Published private(set) var error: String?
     @Published private(set) var isLoading = true
     @Published private(set) var isUnmerged = false
+    @Published private(set) var isEditable = false
+    @Published private(set) var isDirty = false
+    @Published var saveError: String?
 
     let web = DiffWebModel()
 
@@ -69,6 +102,11 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     )
 
     private nonisolated static let maxBytes = 5 << 20
+    private var savedNewContent = ""
+    /// Live text emitted by Pierre's editor. Kept out of `DiffWebModel` while
+    /// editing so a keystroke does not rebuild the CodeView item that owns the
+    /// editor, selection, and undo stack.
+    private var editedNewContent = ""
     private var reloadGeneration: UInt = 0
 
     init(
@@ -90,6 +128,13 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         self.commitParentHash = commitParentHash
         self.commitStatus = commitStatus
         web.fileName = name
+        web.fileID = path
+        web.onFileEditChange = { [weak self] fileID, contents in
+            self?.updateEditedContent(fileID: fileID, contents: contents)
+        }
+        web.onFileEditComplete = { [weak self] fileID, contents in
+            self?.completeEditing(fileID: fileID, contents: contents)
+        }
         reload()
     }
 
@@ -115,6 +160,9 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     func reload() {
+        // Keep the editor's document and undo history stable until the user
+        // leaves edit mode, and never replace an unsaved buffer from disk.
+        guard !web.isEditing, !isDirty else { return }
         reloadGeneration &+= 1
         let generation = reloadGeneration
         isLoading = true
@@ -162,14 +210,73 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
                     }
                     new = Self.readWorktreeFile(root: root, path: path, error: &failureVar)
                 }
-                return (old: old, new: new, failure: failureVar, unmerged: unmerged)
+                let editable = commitHash == nil && !staged
+                    && Self.isEditableWorktreeFile(root: root, path: path)
+                return (
+                    old: old,
+                    new: new,
+                    failure: failureVar,
+                    unmerged: unmerged,
+                    editable: editable
+                )
             }.value
             guard let self, self.reloadGeneration == generation else { return }
             self.isLoading = false
             self.error = result.failure
             self.isUnmerged = result.unmerged
+            self.isEditable = result.editable && result.failure == nil
+            self.web.isEditing = self.isEditable && DiffViewPreferences.prefersEditing
             self.web.oldContent = result.old
             self.web.newContent = result.new
+            self.savedNewContent = result.new
+            self.editedNewContent = result.new
+            self.isDirty = false
+            self.saveError = nil
+        }
+    }
+
+    /// Accepts the updated side emitted by Pierre's editor. The web view owns
+    /// the live document; this mirrored value drives dirty state and saving.
+    func updateEditedContent(fileID: String, contents: String) {
+        guard isEditable, fileID == path else { return }
+        editedNewContent = contents
+        isDirty = contents != savedNewContent
+        if isDirty {
+            // A reload already in flight must not win after the first edit.
+            reloadGeneration &+= 1
+        }
+    }
+
+    /// Once Pierre has torn down its editor, publish the final buffer so the
+    /// read-only diff renders the text the user just reviewed and edited.
+    func completeEditing(fileID: String, contents: String) {
+        updateEditedContent(fileID: fileID, contents: contents)
+        guard isEditable, fileID == path else { return }
+        web.newContent = contents
+    }
+
+    func setDiffStyle(_ style: DiffStyle) {
+        web.diffStyle = style
+        DiffViewPreferences.diffStyle = style
+    }
+
+    func setEditing(_ isEditing: Bool) {
+        guard isEditable else { return }
+        web.isEditing = isEditing
+        DiffViewPreferences.prefersEditing = isEditing
+    }
+
+    func save() {
+        guard isEditable, isDirty else { return }
+        let fileURL = URL(fileURLWithPath: repoRoot, isDirectory: true)
+            .appendingPathComponent(path)
+        do {
+            try editedNewContent.write(to: fileURL, atomically: true, encoding: .utf8)
+            savedNewContent = editedNewContent
+            isDirty = false
+            saveError = nil
+        } catch {
+            saveError = error.localizedDescription
         }
     }
 
@@ -294,6 +401,17 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         return run.status == 0 && !run.stdout.isEmpty
     }
 
+    /// Editing is limited to regular worktree files. In particular, writing a
+    /// symlink atomically would replace the link itself with a regular file.
+    private nonisolated static func isEditableWorktreeFile(root: String, path: String) -> Bool {
+        let url = URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent(path)
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              (attributes[.type] as? FileAttributeType) == .typeRegular
+        else { return false }
+        return true
+    }
+
     private nonisolated static func readWorktreeFile(
         root: String, path: String, error: inout String?
     ) -> String {
@@ -413,10 +531,11 @@ private struct DiffWebRoot: View {
         PierreMultiDiffView(
             files: [
                 PierreDiffFile(
-                    id: model.fileName,
+                    id: model.fileID,
                     name: model.fileName,
                     oldContents: model.oldContent,
-                    newContents: model.newContent
+                    newContents: model.newContent,
+                    isEditable: model.isEditing
                 )
             ],
             diffStyle: $model.diffStyle,
@@ -424,6 +543,12 @@ private struct DiffWebRoot: View {
             renderOptions: DiffFont.renderOptions(
                 family: settings.fontFamily, size: settings.fontSize
             ),
+            onFileEditChange: { fileID, contents in
+                model.onFileEditChange?(fileID, contents)
+            },
+            onFileEditComplete: { fileID, contents in
+                model.onFileEditComplete?(fileID, contents)
+            },
             onReady: {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     model.isReady = true
@@ -483,6 +608,9 @@ struct DiffViewerView: View {
         VStack(spacing: 0) {
             if diff.isUnmerged {
                 conflictBanner
+            }
+            if let saveError = diff.saveError {
+                saveErrorBar(saveError)
             }
             Group {
                 if let error = diff.error {
@@ -548,25 +676,18 @@ struct DiffViewerView: View {
     }
 
     private var controlBar: some View {
-        HStack {
-            Spacer(minLength: 0)
-            Picker("", selection: $web.diffStyle) {
-                ForEach(DiffStyle.allCases) { style in
-                    Text(verbatim: localizedDiffStyle(style)).tag(style)
-                }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .fixedSize()
-            .accessibilityLabel("Diff Layout")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color(nsColor: Theme.divider))
-                .frame(height: 1)
-        }
+        DiffControlsBar(
+            diffStyle: Binding(
+                get: { web.diffStyle },
+                set: { diff.setDiffStyle($0) }
+            ),
+            isEditing: Binding(
+                get: { web.isEditing },
+                set: { diff.setEditing($0) }
+            ),
+            canEdit: diff.isEditable
+        )
+        .frame(height: 37)
     }
 
     private func placeholder(icon: String, text: String) -> some View {
@@ -583,15 +704,128 @@ struct DiffViewerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func localizedDiffStyle(_ style: DiffStyle) -> String {
-        switch style {
-        case .unified:
-            return String(localized: "Unified", comment: "A single-column diff layout.")
-        case .split:
-            return String(localized: "Split", comment: "A side-by-side diff layout.")
-        @unknown default:
-            return style.displayName
+    private func saveErrorBar(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+            Text("Could not save: \(message)")
+                .font(.system(size: 11))
+                .lineLimit(1)
+            Spacer(minLength: 0)
         }
+        .foregroundStyle(Color(red: 0.82, green: 0.60, blue: 0.13))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(0.04))
+    }
+}
+
+/// Native controls for the materially changed diff toolbar. The surrounding
+/// diff view is legacy SwiftUI, but new interaction stays in AppKit.
+private struct DiffControlsBar: NSViewRepresentable {
+    @Binding var diffStyle: DiffStyle
+    @Binding var isEditing: Bool
+    let canEdit: Bool
+
+    func makeNSView(context: Context) -> DiffControlsNSView {
+        DiffControlsNSView()
+    }
+
+    func updateNSView(_ view: DiffControlsNSView, context: Context) {
+        view.update(
+            diffStyle: diffStyle,
+            isEditing: isEditing,
+            canEdit: canEdit,
+            onDiffStyleChange: { diffStyle = $0 },
+            onEditingChange: { isEditing = $0 }
+        )
+    }
+}
+
+private final class DiffControlsNSView: NSView {
+    private let modeControl = NSSegmentedControl(
+        labels: [
+            String(localized: "Review", comment: "Read-only mode for a diff."),
+            String(localized: "Edit", comment: "Editable mode for a diff."),
+        ],
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
+    private let layoutControl = NSSegmentedControl(
+        labels: [
+            String(localized: "Unified", comment: "A single-column diff layout."),
+            String(localized: "Split", comment: "A side-by-side diff layout."),
+        ],
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
+    private let divider = NSView()
+    private var onDiffStyleChange: ((DiffStyle) -> Void)?
+    private var onEditingChange: ((Bool) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+
+        for control in [modeControl, layoutControl] {
+            control.controlSize = .small
+            control.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(control)
+        }
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
+        modeControl.setAccessibilityLabel(String(localized: "Diff Mode"))
+        layoutControl.target = self
+        layoutControl.action = #selector(layoutChanged)
+        layoutControl.setAccessibilityLabel(String(localized: "Diff Layout"))
+
+        divider.wantsLayer = true
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(divider)
+
+        NSLayoutConstraint.activate([
+            layoutControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            layoutControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            modeControl.trailingAnchor.constraint(equalTo: layoutControl.leadingAnchor, constant: -8),
+            modeControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            divider.leadingAnchor.constraint(equalTo: leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: trailingAnchor),
+            divider.bottomAnchor.constraint(equalTo: bottomAnchor),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(
+        diffStyle: DiffStyle,
+        isEditing: Bool,
+        canEdit: Bool,
+        onDiffStyleChange: @escaping (DiffStyle) -> Void,
+        onEditingChange: @escaping (Bool) -> Void
+    ) {
+        self.onDiffStyleChange = onDiffStyleChange
+        self.onEditingChange = onEditingChange
+        layer?.backgroundColor = Theme.background.cgColor
+        divider.layer?.backgroundColor = Theme.divider.cgColor
+
+        layoutControl.selectedSegment = diffStyle == .split ? 1 : 0
+        modeControl.isHidden = !canEdit
+        modeControl.setEnabled(canEdit, forSegment: 1)
+        modeControl.selectedSegment = canEdit && isEditing ? 1 : 0
+    }
+
+    @objc private func modeChanged() {
+        onEditingChange?(modeControl.selectedSegment == 1)
+    }
+
+    @objc private func layoutChanged() {
+        onDiffStyleChange?(layoutControl.selectedSegment == 1 ? .split : .unified)
     }
 }
 

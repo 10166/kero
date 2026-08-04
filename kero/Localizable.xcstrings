@@ -2076,6 +2076,22 @@
         }
       }
     },
+    "Diff Mode" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diffモード"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diff 模式"
+          }
+        }
+      }
+    },
     "Discard all changes" : {
       "localizations" : {
         "ja" : {
@@ -2257,7 +2273,7 @@
       }
     },
     "Do you want to save the changes you made to %@?" : {
-      "comment" : "Unsaved file confirmation. The placeholder is a file name.",
+      "comment" : "Unsaved file or diff confirmation. The placeholder is a file name.",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2301,6 +2317,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "向下"
+          }
+        }
+      }
+    },
+    "Edit" : {
+      "comment" : "Editable mode for a diff.",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編集"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑"
           }
         }
       }
@@ -5447,6 +5480,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在执行 revert"
+          }
+        }
+      }
+    },
+    "Review" : {
+      "comment" : "Read-only mode for a diff.",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レビュー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "审阅"
           }
         }
       }

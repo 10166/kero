@@ -622,11 +622,9 @@ final class TerminalManager: nonisolated ObservableObject {
         )
     }
 
-    /// Saves the focused pane if it holds a file.
+    /// Saves the focused pane if it holds a file or an editable diff.
     func saveSelectedFile() {
-        if case .file(let file)? = selectedProject?.focusedContent {
-            file.save()
-        }
+        selectedProject?.focusedContent?.save()
     }
 
     /// Propagates a file-tree rename to every open file tab across all

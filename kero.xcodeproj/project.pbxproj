@@ -149,7 +149,7 @@
 				AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */,
 				AA10000000000000000000B0 /* XCLocalSwiftPackageReference "Vendor/libghostty-spm" */,
 				AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */,
-				AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */,
+				AA10000000000000000000D0 /* XCLocalSwiftPackageReference "../PierreDiffsSwift" */,
 				AA10000000000000000000E0 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */,
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
@@ -452,17 +452,13 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/TreeSitterTSX;
 		};
+		AA10000000000000000000D0 /* XCLocalSwiftPackageReference "../PierreDiffsSwift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../PierreDiffsSwift;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/egoist-labs/PierreDiffsSwift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.4.1;
-			};
-		};
 		AA10000000000000000000E0 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -504,7 +500,7 @@
 		};
 		AA10000000000000000000D1 /* PierreDiffsSwift */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */;
+			package = AA10000000000000000000D0 /* XCLocalSwiftPackageReference "../PierreDiffsSwift" */;
 			productName = PierreDiffsSwift;
 		};
 		AA10000000000000000000E1 /* Sparkle */ = {
