@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- Drag a tab onto the current tab's content to turn it into a split pane
+
 ## [0.1.41]
 
 - Fix diff controls and content sometimes using the wrong appearance when Kero follows the system theme
