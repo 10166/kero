@@ -56,6 +56,16 @@ extension PaneContent {
         }
     }
 
+    /// File and diff panes both represent a concrete path. Their surrounding
+    /// chrome uses the same filename-aware icon as the file and Git panels.
+    @MainActor var fileIconPath: String? {
+        switch self {
+        case .file(let file): return file.path
+        case .diff(let diff): return diff.path
+        case .session, .browser: return nil
+        }
+    }
+
     @MainActor var isDirty: Bool {
         if case .file(let file) = self { return file.isDirty }
         return false

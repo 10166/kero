@@ -21,6 +21,7 @@ the original feature bullet instead of adding separate entries for them.
 - Fix desktop notifications from Grok and other OSC 777 clients when using the Alacritty terminal backend
 - Close all open files or diffs from the tab bar context menu
 - Improve the Recent Commits view in git panel
+- Show filename-aware Material icons across file trees, Git file lists, tabs, panes, previews, and file search
 
 ## [0.1.39]
 

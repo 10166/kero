@@ -670,12 +670,12 @@ private final class CommitFileRowView: NSView {
             width: 12,
             height: 12
         )
-        let symbol = NSImage(
-            systemSymbolName: change.status == "D" ? "doc.badge.minus" : "doc.text",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
-        NSColor.secondaryLabelColor.set()
-        symbol?.draw(in: symbolRect)
+        MaterialFileIcon.image(forPath: change.path, appearance: effectiveAppearance).draw(
+            in: symbolRect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: change.status == "D" ? 0.6 : 1
+        )
 
         let text = NSMutableAttributedString(
             string: change.fileName,
