@@ -67,6 +67,17 @@ final class DiffWebModel: nonisolated ObservableObject {
     /// The WKWebView renders blank until its JS bundle has drawn the diff;
     /// a skeleton covers it until the bridge reports ready.
     @Published var isReady = false
+    /// Explicit appearance for the long-lived, separately hosted diff root.
+    /// Its NSHostingView is re-parented between SwiftUI containers, so relying
+    /// on an implicitly inherited colorScheme can leave WebKit one appearance
+    /// behind after macOS changes between light and dark.
+    @Published private(set) var usesDarkAppearance = false
+
+    func updateAppearance(_ appearance: NSAppearance) {
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        guard usesDarkAppearance != isDark else { return }
+        usesDarkAppearance = isDark
+    }
 }
 
 /// A git diff opened as a tab from the git panel. Loads both sides of the
@@ -263,7 +274,8 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         guard webHostView == nil else { return }
         await Task.yield()
         guard !Task.isCancelled, webHostView == nil else { return }
-        webHostView = NSHostingView(rootView: DiffWebRoot(model: web))
+        web.updateAppearance(NSApp.effectiveAppearance)
+        webHostView = DiffWebHostingView(model: web)
     }
 
     /// Accepts the updated side emitted by Pierre's editor. The web view owns
@@ -592,6 +604,45 @@ private struct DiffWebRoot: View {
                 }
             }
         )
+        // Pierre derives its JavaScript theme from this environment value.
+        // Make it follow the host view's effective AppKit appearance instead
+        // of a colorScheme captured while the detached host was constructed.
+        .environment(
+            \.colorScheme,
+            model.usesDarkAppearance ? ColorScheme.dark : ColorScheme.light
+        )
+    }
+}
+
+/// Bridges the actual AppKit appearance into the detached SwiftUI diff root.
+/// AppKit sends this callback only after the view's effective appearance has
+/// changed, avoiding the old/new ordering race of a global system notification.
+private final class DiffWebHostingView: NSHostingView<DiffWebRoot> {
+    private let model: DiffWebModel
+
+    init(model: DiffWebModel) {
+        self.model = model
+        super.init(rootView: DiffWebRoot(model: model))
+    }
+
+    @available(*, unavailable)
+    required init(rootView: DiffWebRoot) {
+        fatalError("init(rootView:) has not been implemented")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        model.updateAppearance(effectiveAppearance)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        model.updateAppearance(effectiveAppearance)
     }
 }
 
@@ -869,12 +920,28 @@ private final class DiffControlsSkeletonNSView: NSView {
     }
 
     func update(showsModePlaceholder: Bool) {
-        layer?.backgroundColor = Theme.background.cgColor
-        divider.layer?.backgroundColor = Theme.divider.cgColor
-        let fill = NSColor.labelColor.withAlphaComponent(0.05).cgColor
-        modePlaceholder.layer?.backgroundColor = fill
-        layoutPlaceholder.layer?.backgroundColor = fill
+        updateAppearanceColors()
         modePlaceholder.isHidden = !showsModePlaceholder
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearanceColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearanceColors()
+    }
+
+    private func updateAppearanceColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = Theme.background.cgColor
+            divider.layer?.backgroundColor = Theme.divider.cgColor
+            let fill = NSColor.labelColor.withAlphaComponent(0.05).cgColor
+            modePlaceholder.layer?.backgroundColor = fill
+            layoutPlaceholder.layer?.backgroundColor = fill
+        }
     }
 }
 
@@ -947,13 +1014,31 @@ private final class DiffControlsNSView: NSView {
     ) {
         self.onDiffStyleChange = onDiffStyleChange
         self.onEditingChange = onEditingChange
-        layer?.backgroundColor = Theme.background.cgColor
-        divider.layer?.backgroundColor = Theme.divider.cgColor
+        updateAppearanceColors()
 
         layoutControl.selectedSegment = diffStyle == .split ? 1 : 0
         modeControl.isHidden = !canEdit
         modeControl.setEnabled(canEdit, forSegment: 1)
         modeControl.selectedSegment = canEdit && isEditing ? 1 : 0
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearanceColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearanceColors()
+        modeControl.needsDisplay = true
+        layoutControl.needsDisplay = true
+    }
+
+    private func updateAppearanceColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = Theme.background.cgColor
+            divider.layer?.backgroundColor = Theme.divider.cgColor
+        }
     }
 
     @objc private func modeChanged() {

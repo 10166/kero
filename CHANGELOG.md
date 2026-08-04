@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- Fix diff controls and content sometimes using the wrong appearance when Kero follows the system theme
+
 ## [0.1.40]
 
 - Edit live worktree changes directly in the diff view, with remembered Review/Edit and Unified/Split controls plus normal save/discard handling
