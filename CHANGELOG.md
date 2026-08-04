@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.42]
+
 - Drag a tab onto the current tab's content to turn it into a split pane
 
 ## [0.1.41]

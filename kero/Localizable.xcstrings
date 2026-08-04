@@ -6377,6 +6377,22 @@
         }
       }
     },
+    "Tab" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タブ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签页"
+          }
+        }
+      }
+    },
     "Tab %lld" : {
       "localizations" : {
         "ja" : {
