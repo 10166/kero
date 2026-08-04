@@ -193,7 +193,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     /// running. Without polling, dropping that event could leave the snapshot
     /// stale indefinitely.
     private var refreshPending = false
-    private static let recentCommitPageSize = 8
+    private static let recentCommitPageSize = 30
     private var recentCommitLimit = recentCommitPageSize
     private var recentCommitLimitByRoot: [String: Int] = [:]
     /// Keeps a mutation globally exclusive even if the terminal changes cwd
