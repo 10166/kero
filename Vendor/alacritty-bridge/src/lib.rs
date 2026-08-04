@@ -397,9 +397,13 @@ enum SyncUpdateEvent {
 
 const SYNCHRONIZED_UPDATE_TIMEOUT: Duration = Duration::from_millis(150);
 
-/// Alacritty's default URL hint, kept in sync with the app's built-in config.
+/// Alacritty's default URL hint plus local file paths containing a slash.
+/// Requiring a slash avoids turning ordinary dotted words into links while
+/// still covering absolute, home-relative, explicit-relative, and project-
+/// relative paths.
 #[rustfmt::skip]
-const URL_REGEX: &str = "(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)\
+const LINK_REGEX: &str = "((ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)|\
+                          (/|~/|\\./|\\.\\./|[A-Za-z0-9._@%+~-]+/))\
                          [^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`\\\\]+";
 
 /// Avoid walking an effectively unbounded soft-wrapped logical line on hover.
@@ -974,7 +978,7 @@ pub unsafe extern "C" fn kero_alacritty_new(
     if config.is_null() || theme.is_null() {
         return std::ptr::null_mut();
     }
-    let Ok(url_regex) = RegexSearch::new(URL_REGEX) else {
+    let Ok(url_regex) = RegexSearch::new(LINK_REGEX) else {
         return std::ptr::null_mut();
     };
     let config = &*config;
@@ -2003,12 +2007,12 @@ mod tests {
     }
 
     fn url_in(term: &Term<VoidListener>, point: Point) -> Option<String> {
-        let mut regex = RegexSearch::new(URL_REGEX).unwrap();
+        let mut regex = RegexSearch::new(LINK_REGEX).unwrap();
         plain_url_at(term, &mut regex, point).map(|(url, _)| url)
     }
 
     fn url_match_in(term: &Term<VoidListener>, point: Point) -> Option<(String, Match)> {
-        let mut regex = RegexSearch::new(URL_REGEX).unwrap();
+        let mut regex = RegexSearch::new(LINK_REGEX).unwrap();
         plain_url_at(term, &mut regex, point)
     }
 
@@ -2049,6 +2053,31 @@ mod tests {
             url_in(&term, ascii_point(content, "balanced")),
             Some(content.to_owned())
         );
+    }
+
+    #[test]
+    fn plain_url_lookup_matches_local_file_paths() {
+        for path in [
+            "/tmp/kero/main.swift",
+            "~/Developer/kero/main.swift",
+            "./Sources/main.swift",
+            "../Shared/main.swift",
+            "Sources/Kero/main.swift:42:8",
+        ] {
+            let term = parse(path.as_bytes());
+            assert_eq!(
+                url_in(&term, ascii_point(path, "main")),
+                Some(path.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn plain_url_lookup_does_not_match_bare_file_names() {
+        let path = "main.swift";
+        let term = parse(path.as_bytes());
+
+        assert_eq!(url_in(&term, ascii_point(path, "main")), None);
     }
 
     #[test]

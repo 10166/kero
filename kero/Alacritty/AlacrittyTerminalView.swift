@@ -1622,7 +1622,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     override func rightMouseDown(with event: NSEvent) {
         focusForInteraction()
         NSMenu.popUpContextMenu(
-            contextMenu(initialURL: browserInitialURL(for: event)),
+            contextMenu(linkTarget: linkTarget(for: event)),
             with: event,
             for: self
         )
@@ -1630,23 +1630,33 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
 
     override func menu(for event: NSEvent) -> NSMenu? {
         focusForInteraction()
-        return contextMenu(initialURL: browserInitialURL(for: event))
+        return contextMenu(linkTarget: linkTarget(for: event))
     }
 
-    private func browserInitialURL(for event: NSEvent) -> String? {
+    private func linkTarget(for event: NSEvent) -> TerminalLinkTarget? {
         guard event.modifierFlags.contains(.command) else { return nil }
-        return url(at: gridPoint(for: event))?.value
+        guard let value = url(at: gridPoint(for: event))?.value else { return nil }
+        return events?.terminalLinkTarget(for: value)
     }
 
-    private func contextMenu(initialURL: String?) -> NSMenu {
+    private func contextMenu(linkTarget: TerminalLinkTarget?) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(contextItem(String(localized: "Copy"), #selector(copy(_:))))
         menu.addItem(contextItem(String(localized: "Paste"), #selector(paste(_:))))
         menu.addItem(.separator())
         menu.addItem(contextItem(String(localized: "Select All"), #selector(selectAll(_:))))
-        menu.addItem(.separator())
-        for item in splitTarget.browserMenuItems(initialURL: initialURL) {
-            menu.addItem(item)
+        if let linkTarget {
+            menu.addItem(.separator())
+            switch linkTarget {
+            case .url(let url):
+                for item in splitTarget.browserMenuItems(initialURL: url.absoluteString) {
+                    menu.addItem(item)
+                }
+            case .file(let url):
+                for item in splitTarget.fileMenuItems(path: url.path) {
+                    menu.addItem(item)
+                }
+            }
         }
         menu.addItem(.separator())
         for item in splitTarget.menuItems() { menu.addItem(item) }
