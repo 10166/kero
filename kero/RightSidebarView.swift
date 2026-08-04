@@ -651,6 +651,25 @@ private extension GitStatusModel.FileDecoration {
 private struct GitPanel: View {
     @ObservedObject private var themeChanges = Theme.changes
 
+    private enum EntryOperation: Equatable {
+        case stage
+        case unstage
+        case discard
+    }
+
+    private enum OperationTrigger: Equatable {
+        case branchMenu
+        case moreMenu
+        case primaryAction
+        case commitMenu
+        case syncButton
+        case stageAll
+        case unstageAll
+        case discardAll
+        case entry(path: String, operation: EntryOperation)
+        case initializeRepository
+    }
+
     private struct FileFingerprint: Equatable {
         let exists: Bool
         let size: UInt64
@@ -687,31 +706,26 @@ private struct GitPanel: View {
     @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
     @State private var showFilter = false
-    @State private var showBranchCreator = false
-    @State private var newBranchName = ""
     @State private var operationExpanded = false
-    @FocusState private var branchFieldFocused: Bool
+    @State private var operationTrigger: OperationTrigger?
     @Environment(\.sidebarFontScale) private var sidebarFontScale
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            operationBanner
+            operationFailureBanner
 
             if let statusError = model.statusError {
                 statusFailure(statusError)
             } else if !model.isRepo {
                 if model.isResolvingInitialStatus {
                     placeholder(icon: "arrow.clockwise", text: String(localized: "Finding repository…"))
-                } else if model.isBusy {
-                    placeholder(icon: "hourglass", text: String(localized: "Finishing Git operation…"))
                 } else {
                     notRepository
                 }
             } else {
                 trackingBar
                 repositoryOperationBanner
-                branchCreator
                 commitBox
                 filterBar
                 changeList
@@ -729,7 +743,11 @@ private struct GitPanel: View {
                    role: .destructive) {
                 if let pendingDiscard {
                     if discardSnapshotIsCurrent(pendingDiscard) {
-                        model.discard(pendingDiscard.entry)
+                        performOperation(
+                            .entry(path: pendingDiscard.entry.path, operation: .discard)
+                        ) {
+                            model.discard(pendingDiscard.entry)
+                        }
                     } else {
                         model.cancelStaleDiscard()
                     }
@@ -752,7 +770,9 @@ private struct GitPanel: View {
             Button("Discard All Changes", role: .destructive) {
                 let snapshot = pendingDiscardAll
                 if !snapshot.isEmpty && snapshot.allSatisfy(discardSnapshotIsCurrent) {
-                    model.discardChanges(snapshot.map(\.entry))
+                    performOperation(.discardAll) {
+                        model.discardChanges(snapshot.map(\.entry))
+                    }
                 } else {
                     model.cancelStaleDiscard()
                 }
@@ -766,11 +786,12 @@ private struct GitPanel: View {
             pendingDiscard = nil
             pendingDiscardAll = []
             confirmDiscardAll = false
-            showBranchCreator = false
-            newBranchName = ""
         }
         .onChange(of: model.repositoryIdentity) {
             resetRepositoryDrafts()
+        }
+        .onChange(of: model.isBusy) {
+            if !model.isBusy { operationTrigger = nil }
         }
     }
 
@@ -786,18 +807,14 @@ private struct GitPanel: View {
                     .foregroundStyle(Color(nsColor: Theme.accent))
                 PanelHeader(title: String(localized: "Git"), subtitle: model.rootPath)
             }
-            // Only surface progress for user operations and initial repository
-            // discovery. Event-driven refreshes retain the resolved content.
-            if model.isBusy || model.isResolvingInitialStatus {
+            // User operations surface progress in their initiating control.
+            // Keep repository discovery here because it has no trigger button.
+            if model.isResolvingInitialStatus {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.6)
                     .frame(width: 12, height: 12)
-                    .accessibilityLabel(
-                        model.isBusy
-                            ? String(localized: "Git operation in progress")
-                            : String(localized: "Refreshing Git status")
-                    )
+                    .accessibilityLabel(String(localized: "Refreshing Git status"))
             }
             if model.isRepo {
                 headerButton(
@@ -828,7 +845,9 @@ private struct GitPanel: View {
             if !model.branches.isEmpty {
                 ForEach(model.branches, id: \.self) { branch in
                     Button {
-                        model.switchBranch(to: branch)
+                        performOperation(.branchMenu) {
+                            model.switchBranch(to: branch)
+                        }
                     } label: {
                         if branch == model.branch {
                             Label(branch, systemImage: "checkmark")
@@ -841,15 +860,20 @@ private struct GitPanel: View {
                 Divider()
             }
             Button("Create New Branch…") {
-                newBranchName = ""
-                showBranchCreator = true
-                DispatchQueue.main.async { branchFieldFocused = true }
+                presentCreateBranchDialog()
             }
+            .disabled(model.isBusy)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "arrow.triangle.branch")
-                    .sidebarFont(size: 11, weight: .medium)
-                    .foregroundStyle(Color(nsColor: Theme.accent))
+                ZStack {
+                    Image(systemName: "arrow.triangle.branch")
+                        .sidebarFont(size: 11, weight: .medium)
+                        .foregroundStyle(Color(nsColor: Theme.accent))
+                        .opacity(operationIsLoading(.branchMenu) ? 0 : 1)
+                    if operationIsLoading(.branchMenu) {
+                        operationProgressView()
+                    }
+                }
                 PanelHeader(
                     title: model.branch ?? String(localized: "Detached HEAD"),
                     subtitle: model.rootPath
@@ -870,39 +894,43 @@ private struct GitPanel: View {
 
     private var moreMenu: some View {
         Menu {
-            Button("Fetch") { model.fetch() }
+            Button("Fetch") { performOperation(.moreMenu, model.fetch) }
                 .disabled(model.isBusy || model.remotes.isEmpty)
-            Button("Pull (Fast-forward Only)") { model.pull() }
+            Button("Pull (Fast-forward Only)") { performOperation(.moreMenu, model.pull) }
                 .disabled(model.isBusy || !model.hasUpstream)
             if model.hasUpstream {
-                Button("Push") { model.push() }
+                Button("Push") { performOperation(.moreMenu, model.push) }
                     .disabled(model.isBusy)
             } else if model.remotes.count > 1 {
                 Menu("Publish Branch to") {
                     ForEach(model.remotes, id: \.self) { remote in
-                        Button(remote) { model.publish(to: remote) }
+                        Button(remote) {
+                            performOperation(.moreMenu) { model.publish(to: remote) }
+                        }
                     }
                 }
                 .disabled(model.isBusy || model.branch == "detached HEAD")
             } else {
-                Button("Publish Branch") { model.push() }
+                Button("Publish Branch") { performOperation(.moreMenu, model.push) }
                     .disabled(model.isBusy || model.remotes.isEmpty || model.branch == "detached HEAD")
             }
-            Button("Sync Changes") { model.syncChanges() }
+            Button("Sync Changes") { performOperation(.moreMenu, model.syncChanges) }
                 .disabled(
                     model.isBusy || model.remotes.isEmpty
                         || (!model.hasUpstream && model.remotes.count != 1)
                         || model.branch == "detached HEAD"
                 )
             Divider()
-            Button("Stash All Changes") { model.stash(includeUntracked: true) }
+            Button("Stash All Changes") {
+                performOperation(.moreMenu) { model.stash(includeUntracked: true) }
+            }
                 .disabled(model.isBusy || model.totalChangeCount == 0)
             Button(
                 model.stashCount == 1
                     ? String(localized: "Pop Stash")
                     : String(localized: "Pop Stash (\(model.stashCount))")
             ) {
-                model.stashPop()
+                performOperation(.moreMenu, model.stashPop)
             }
             .disabled(model.isBusy || model.stashCount == 0)
             Divider()
@@ -913,11 +941,17 @@ private struct GitPanel: View {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.repoRoot)])
             }
         } label: {
-            Image(systemName: "ellipsis")
-                .sidebarFont(size: 10, weight: .medium)
-                .foregroundStyle(.secondary)
-                .frame(width: 18, height: 18)
-                .contentShape(RoundedRectangle(cornerRadius: 4))
+            ZStack {
+                Image(systemName: "ellipsis")
+                    .sidebarFont(size: 10, weight: .medium)
+                    .foregroundStyle(.secondary)
+                    .opacity(operationIsLoading(.moreMenu) ? 0 : 1)
+                if operationIsLoading(.moreMenu) {
+                    operationProgressView()
+                }
+            }
+            .frame(width: 18, height: 18)
+            .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
         .menuStyle(.button)
@@ -1015,11 +1049,13 @@ private struct GitPanel: View {
     }
 
     @ViewBuilder
-    private var operationBanner: some View {
-        if let operation = model.operation {
+    private var operationFailureBanner: some View {
+        if let operation = model.operation,
+           case .failed = operation.state {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    operationIcon(operation)
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .sidebarFont(size: 10)
                     Text(operation.statusLabel)
                         .sidebarFont(size: 10.5, weight: .medium)
                         .lineLimit(1)
@@ -1046,20 +1082,18 @@ private struct GitPanel: View {
                                 : String(localized: "Show Git Output")
                         )
                     }
-                    if !operation.isRunning {
-                        Button {
-                            operationExpanded = false
-                            model.dismissOperation()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .sidebarFont(size: 8, weight: .semibold)
-                                .frame(width: 16, height: 16)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Dismiss")
-                        .accessibilityLabel("Dismiss Git Result")
+                    Button {
+                        operationExpanded = false
+                        model.dismissOperation()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .sidebarFont(size: 8, weight: .semibold)
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                    .accessibilityLabel("Dismiss Git Error")
                 }
                 if operationExpanded, !operation.output.isEmpty {
                     ScrollView([.horizontal, .vertical]) {
@@ -1074,88 +1108,52 @@ private struct GitPanel: View {
                     .accessibilityLabel("Git Output")
                 }
             }
-            .foregroundStyle(operationColor(operation))
+            .foregroundStyle(Color(red: 0.88, green: 0.42, blue: 0.36))
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(operationColor(operation).opacity(0.08))
+                    .fill(Color(red: 0.88, green: 0.42, blue: 0.36).opacity(0.08))
             )
             .padding(.horizontal, 10)
             .padding(.bottom, 7)
         }
     }
 
-    @ViewBuilder
-    private func operationIcon(_ operation: GitStatusModel.Operation) -> some View {
-        switch operation.state {
-        case .running:
-            ProgressView().controlSize(.mini).frame(width: 11, height: 11)
-        case .succeeded:
-            Image(systemName: "checkmark.circle.fill").sidebarFont(size: 10)
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill").sidebarFont(size: 10)
-        }
-    }
+    private func presentCreateBranchDialog() {
+        guard !model.isBusy else { return }
 
-    private func operationColor(_ operation: GitStatusModel.Operation) -> Color {
-        switch operation.state {
-        case .running: return Color(nsColor: Theme.accent)
-        case .succeeded: return Color(red: 0.25, green: 0.68, blue: 0.33)
-        case .failed: return Color(red: 0.88, green: 0.42, blue: 0.36)
-        }
-    }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Create New Branch")
+        alert.informativeText = String(localized: "Enter a name for the new branch.")
 
-    @ViewBuilder
-    private var branchCreator: some View {
-        if showBranchCreator {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.triangle.branch")
-                    .sidebarFont(size: 10)
-                    .foregroundStyle(.secondary)
-                TextField("New branch name", text: $newBranchName)
-                    .textFieldStyle(.plain)
-                    .sidebarFont(size: 11)
-                    .focused($branchFieldFocused)
-                    .onSubmit(createBranch)
-                    .onKeyPress(.escape) {
-                        showBranchCreator = false
-                        return .handled
-                    }
-                Button("Create", action: createBranch)
-                    .buttonStyle(.borderless)
-                    .sidebarFont(size: 10, weight: .medium)
-                    .disabled(newBranchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isBusy)
-                Button {
-                    showBranchCreator = false
-                } label: {
-                    Image(systemName: "xmark").sidebarFont(size: 8, weight: .semibold)
-                }
-                .buttonStyle(.plain)
-                .help("Cancel")
-                .accessibilityLabel("Cancel Branch Creation")
+        let field = NSTextField(string: "")
+        field.placeholderString = String(localized: "Branch name")
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+
+        let create = alert.addButton(withTitle: String(localized: "Create"))
+        create.keyEquivalent = "\r"
+        create.isEnabled = false
+        let cancel = alert.addButton(withTitle: String(localized: "Cancel"))
+        cancel.keyEquivalent = "\u{1b}"
+
+        let validator = NonemptyTextFieldValidator(button: create)
+        field.delegate = validator
+        alert.window.initialFirstResponder = field
+
+        let handleResponse: (NSApplication.ModalResponse) -> Void = { response in
+            _ = validator // Keep the field delegate alive until the sheet closes.
+            guard response == .alertFirstButtonReturn else { return }
+            performOperation(.branchMenu) {
+                model.createBranch(named: field.stringValue)
             }
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.primary.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Color(nsColor: Theme.accent).opacity(0.45))
-            )
-            .padding(.horizontal, 10)
-            .padding(.bottom, 8)
         }
-    }
 
-    private func createBranch() {
-        let name = newBranchName
-        model.createBranch(named: name) { success in
-            guard success else { return }
-            newBranchName = ""
-            showBranchCreator = false
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window, completionHandler: handleResponse)
+        } else {
+            handleResponse(alert.runModal())
         }
     }
 
@@ -1190,6 +1188,7 @@ private struct GitPanel: View {
                         icon: "checkmark",
                         title: commitButtonTitle,
                         enabled: canCommit(includeAll: false),
+                        isLoading: operationIsLoading(.primaryAction),
                         help: String(localized: "Commit staged changes (⌘Return)"),
                         action: performPrimaryAction
                     )
@@ -1202,8 +1201,11 @@ private struct GitPanel: View {
                     icon: "arrow.triangle.2.circlepath",
                     title: syncButtonTitle,
                     enabled: !model.isBusy,
+                    isLoading: operationIsLoading(.syncButton),
                     help: String(localized: "Pull remote commits, then push local ones"),
-                    action: model.syncChanges
+                    action: {
+                        performOperation(.syncButton, model.syncChanges)
+                    }
                 )
             }
         }
@@ -1213,19 +1215,33 @@ private struct GitPanel: View {
 
     private var commitMenu: some View {
         Menu {
-            Button("Commit Staged") { performCommit(includeAll: false) }
+            Button("Commit Staged") {
+                performCommit(includeAll: false, trigger: .commitMenu)
+            }
                 .disabled(!canCommit(includeAll: false))
-            Button("Stage All & Commit") { performCommit(includeAll: true) }
+            Button("Stage All & Commit") {
+                performCommit(includeAll: true, trigger: .commitMenu)
+            }
                 .disabled(!canCommit(includeAll: true))
             Divider()
-            Button("Amend Last Commit") { performCommit(includeAll: false, amend: true) }
+            Button("Amend Last Commit") {
+                performCommit(includeAll: false, amend: true, trigger: .commitMenu)
+            }
                 .disabled(!canAmend(includeAll: false))
-            Button("Stage All & Amend") { performCommit(includeAll: true, amend: true) }
+            Button("Stage All & Amend") {
+                performCommit(includeAll: true, amend: true, trigger: .commitMenu)
+            }
                 .disabled(!canAmend(includeAll: true))
         } label: {
-            Image(systemName: "chevron.down")
-                .sidebarFont(size: 8, weight: .semibold)
-                .foregroundStyle(.secondary)
+            ZStack {
+                Image(systemName: "chevron.down")
+                    .sidebarFont(size: 8, weight: .semibold)
+                    .foregroundStyle(.secondary)
+                    .opacity(operationIsLoading(.commitMenu) ? 0 : 1)
+                if operationIsLoading(.commitMenu) {
+                    operationProgressView()
+                }
+            }
                 .frame(width: 24, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
@@ -1242,13 +1258,17 @@ private struct GitPanel: View {
     }
 
     private func actionButton(
-        icon: String, title: String, enabled: Bool, help: String,
+        icon: String, title: String, enabled: Bool, isLoading: Bool, help: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .sidebarFont(size: 10, weight: .semibold)
+                if isLoading {
+                    operationProgressView()
+                } else {
+                    Image(systemName: icon)
+                        .sidebarFont(size: 10, weight: .semibold)
+                }
                 Text(title)
                     .sidebarFont(size: 11, weight: .medium)
             }
@@ -1256,7 +1276,7 @@ private struct GitPanel: View {
             .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: Theme.accent).opacity(enabled ? 0.85 : 0.3))
+                    .fill(Color(nsColor: Theme.accent).opacity(enabled || isLoading ? 0.85 : 0.3))
             )
             .foregroundStyle(.white)
             .contentShape(RoundedRectangle(cornerRadius: 6))
@@ -1264,7 +1284,9 @@ private struct GitPanel: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .help(help)
-        .accessibilityLabel(title)
+        .accessibilityLabel(
+            isLoading ? String(localized: "\(title), in progress") : title
+        )
     }
 
     private var commitFieldPlaceholder: String {
@@ -1326,14 +1348,20 @@ private struct GitPanel: View {
     }
 
     private func performPrimaryAction() {
-        performCommit(includeAll: false)
+        performCommit(includeAll: false, trigger: .primaryAction)
     }
 
-    private func performCommit(includeAll: Bool, amend: Bool = false) {
+    private func performCommit(
+        includeAll: Bool,
+        amend: Bool = false,
+        trigger: OperationTrigger
+    ) {
         guard amend ? canAmend(includeAll: includeAll) : canCommit(includeAll: includeAll) else { return }
         let submittedMessage = commitMessage
-        model.commit(message: submittedMessage, includeAll: includeAll, amend: amend) { success in
-            if success, commitMessage == submittedMessage { commitMessage = "" }
+        performOperation(trigger) {
+            model.commit(message: submittedMessage, includeAll: includeAll, amend: amend) { success in
+                if success, commitMessage == submittedMessage { commitMessage = "" }
+            }
         }
     }
 
@@ -1408,9 +1436,10 @@ private struct GitPanel: View {
                         actions: filterText.isEmpty ? [
                             .init(
                                 systemImage: "minus",
-                                help: String(localized: "Unstage All Changes")
+                                help: String(localized: "Unstage All Changes"),
+                                isLoading: operationIsLoading(.unstageAll)
                             ) {
-                                model.unstageAll()
+                                performOperation(.unstageAll, model.unstageAll)
                             }
                         ] : [],
                         actionsDisabled: model.isBusy
@@ -1429,15 +1458,17 @@ private struct GitPanel: View {
                         actions: filterText.isEmpty ? [
                             .init(
                                 systemImage: "arrow.uturn.backward",
-                                help: String(localized: "Discard All Changes")
+                                help: String(localized: "Discard All Changes"),
+                                isLoading: operationIsLoading(.discardAll)
                             ) {
                                 requestDiscardAll()
                             },
                             .init(
                                 systemImage: "plus",
-                                help: String(localized: "Stage All Changes")
+                                help: String(localized: "Stage All Changes"),
+                                isLoading: operationIsLoading(.stageAll)
                             ) {
-                                model.stageAll()
+                                performOperation(.stageAll, model.stageAll)
                             },
                         ] : [],
                         actionsDisabled: model.isBusy
@@ -1508,11 +1539,17 @@ private struct GitPanel: View {
     private func row(
         _ entry: GitStatusModel.Entry, status: Character, kind: GitEntryRow.Kind
     ) -> some View {
-        GitEntryRow(
+        let stageTrigger = OperationTrigger.entry(path: entry.path, operation: .stage)
+        let unstageTrigger = OperationTrigger.entry(path: entry.path, operation: .unstage)
+        let discardTrigger = OperationTrigger.entry(path: entry.path, operation: .discard)
+        return GitEntryRow(
             entry: entry,
             status: status,
             kind: kind,
             disabled: model.isBusy,
+            isStageLoading: operationIsLoading(stageTrigger),
+            isUnstageLoading: operationIsLoading(unstageTrigger),
+            isDiscardLoading: operationIsLoading(discardTrigger),
             openDiff: {
                 guard model.isCurrent(entry) else { return }
                 var diffEntry = entry
@@ -1525,8 +1562,8 @@ private struct GitPanel: View {
             },
             openFile: { openIfPossible(entry) },
             openToSide: { openIfPossible(entry, toSide: true) },
-            stage: { model.stage(entry) },
-            unstage: { model.unstage(entry) },
+            stage: { performOperation(stageTrigger) { model.stage(entry) } },
+            unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: { pendingDiscard = makePendingDiscard(entry) },
             absolutePath: model.absolutePath(for: entry),
             copyRelativePath: { copyToPasteboard(entry.path) },
@@ -1638,6 +1675,24 @@ private struct GitPanel: View {
 
     // MARK: Bits
 
+    private func performOperation(_ trigger: OperationTrigger, _ action: () -> Void) {
+        operationExpanded = false
+        operationTrigger = trigger
+        action()
+        if !model.isBusy { operationTrigger = nil }
+    }
+
+    private func operationIsLoading(_ trigger: OperationTrigger) -> Bool {
+        model.isBusy && operationTrigger == trigger
+    }
+
+    private func operationProgressView() -> some View {
+        ProgressView()
+            .controlSize(.mini)
+            .frame(width: 11, height: 11)
+            .accessibilityHidden(true)
+    }
+
     private func placeholder(icon: String, text: String) -> some View {
         VStack(spacing: 8) {
             Spacer()
@@ -1681,8 +1736,17 @@ private struct GitPanel: View {
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
             }
-            Button("Initialize Repository") {
-                model.initializeRepository()
+            Button {
+                performOperation(.initializeRepository) {
+                    model.initializeRepository()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    if operationIsLoading(.initializeRepository) {
+                        operationProgressView()
+                    }
+                    Text("Initialize Repository")
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -1747,9 +1811,8 @@ private struct GitPanel: View {
         commitMessage = ""
         filterText = ""
         showFilter = false
-        newBranchName = ""
-        showBranchCreator = false
         operationExpanded = false
+        operationTrigger = nil
         pendingDiscard = nil
         pendingDiscardAll = []
         confirmDiscardAll = false
@@ -1765,12 +1828,40 @@ private struct GitPanel: View {
     }
 }
 
+private final class NonemptyTextFieldValidator: NSObject, NSTextFieldDelegate {
+    private weak var button: NSButton?
+
+    init(button: NSButton) {
+        self.button = button
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField else { return }
+        button?.isEnabled = !field.stringValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+    }
+}
+
 private struct GitSectionHeader: View {
     struct Action: Identifiable {
         let id = UUID()
         let systemImage: String
         let help: String
+        let isLoading: Bool
         let perform: () -> Void
+
+        init(
+            systemImage: String,
+            help: String,
+            isLoading: Bool = false,
+            perform: @escaping () -> Void
+        ) {
+            self.systemImage = systemImage
+            self.help = help
+            self.isLoading = isLoading
+            self.perform = perform
+        }
     }
 
     let title: String
@@ -1826,17 +1917,29 @@ private struct GitSectionHeader: View {
 
             ForEach(actions) { action in
                 Button(action: action.perform) {
-                    Image(systemName: action.systemImage)
-                        .sidebarFont(size: 9, weight: .medium)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16, height: 16)
-                        .contentShape(RoundedRectangle(cornerRadius: 3))
+                    Group {
+                        if action.isLoading {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: action.systemImage)
+                                .sidebarFont(size: 9, weight: .medium)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: 16, height: 16)
+                    .contentShape(RoundedRectangle(cornerRadius: 3))
                 }
                 .buttonStyle(.plain)
                 .disabled(actionsDisabled)
-                .opacity(actionsDisabled ? 0.3 : (isHovering ? 1 : 0.55))
+                .opacity(action.isLoading ? 1 : (actionsDisabled ? 0.3 : (isHovering ? 1 : 0.55)))
                 .help(action.help)
-                .accessibilityLabel(action.help)
+                .accessibilityLabel(
+                    action.isLoading
+                        ? String(localized: "\(action.help), in progress")
+                        : action.help
+                )
             }
 
             Spacer(minLength: 0)
@@ -1877,6 +1980,9 @@ private struct GitEntryRow: View {
     let status: Character
     let kind: Kind
     let disabled: Bool
+    let isStageLoading: Bool
+    let isUnstageLoading: Bool
+    let isDiscardLoading: Bool
     let openDiff: () -> Void
     let openFile: () -> Void
     let openToSide: () -> Void
@@ -1926,9 +2032,13 @@ private struct GitEntryRow: View {
             .accessibilityLabel("\(entry.fileName), \(statusName)")
             .accessibilityHint(kind == .merge ? "Opens conflict changes" : "Opens changes")
 
-            if !disabled {
+            if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
                 hoverActions
-                    .opacity(isHovering || isFocused ? 1 : 0.55)
+                    .opacity(
+                        isStageLoading || isUnstageLoading || isDiscardLoading
+                            ? 1
+                            : (isHovering || isFocused ? 1 : 0.55)
+                    )
             }
         }
         // Fixed height so action buttons do not grow the dense file row.
@@ -1951,23 +2061,27 @@ private struct GitEntryRow: View {
                 rowButton(
                     "plus",
                     help: String(localized: "Mark Resolved (Stage)"),
+                    isLoading: isStageLoading,
                     action: stage
                 )
             case .staged:
                 rowButton(
                     "minus",
                     help: String(localized: "Unstage Changes"),
+                    isLoading: isUnstageLoading,
                     action: unstage
                 )
             case .unstaged:
                 rowButton(
                     "arrow.uturn.backward",
                     help: String(localized: "Discard Changes"),
+                    isLoading: isDiscardLoading,
                     action: discard
                 )
                 rowButton(
                     "plus",
                     help: String(localized: "Stage Changes"),
+                    isLoading: isStageLoading,
                     action: stage
                 )
             }
@@ -1975,18 +2089,32 @@ private struct GitEntryRow: View {
     }
 
     private func rowButton(
-        _ systemImage: String, help: String, action: @escaping () -> Void
+        _ systemImage: String,
+        help: String,
+        isLoading: Bool,
+        action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .sidebarFont(size: 9, weight: .semibold)
-                .foregroundStyle(.secondary)
-                .frame(width: 16, height: 16)
-                .contentShape(RoundedRectangle(cornerRadius: 3))
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.7)
+                } else {
+                    Image(systemName: systemImage)
+                        .sidebarFont(size: 9, weight: .semibold)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 16, height: 16)
+            .contentShape(RoundedRectangle(cornerRadius: 3))
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
         .help(help)
-        .accessibilityLabel(help)
+        .accessibilityLabel(
+            isLoading ? String(localized: "\(help), in progress") : help
+        )
     }
 
     @ViewBuilder

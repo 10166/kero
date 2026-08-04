@@ -204,6 +204,9 @@
         }
       }
     },
+    "%@, in progress" : {
+
+    },
     "%@: %@" : {
       "comment" : "Accessibility label for a terminal feature and whether it is available.",
       "localizations" : {
@@ -738,6 +741,9 @@
         }
       }
     },
+    "Branch name" : {
+
+    },
     "Branch or HEAD changed before the file action could run. Review the current changes and try again." : {
       "localizations" : {
         "ja" : {
@@ -819,6 +825,7 @@
       }
     },
     "Cancel Branch Creation" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -1865,6 +1872,9 @@
         }
       }
     },
+    "Create New Branch" : {
+
+    },
     "Create New Branch…" : {
       "localizations" : {
         "ja" : {
@@ -2256,7 +2266,11 @@
         }
       }
     },
+    "Dismiss Git Error" : {
+
+    },
     "Dismiss Git Result" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2369,6 +2383,9 @@
           }
         }
       }
+    },
+    "Enter a name for the new branch." : {
+
     },
     "Equalize Panes" : {
       "localizations" : {
@@ -2756,6 +2773,7 @@
       }
     },
     "Finishing Git operation…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -3076,6 +3094,7 @@
       }
     },
     "Git operation in progress" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -3770,6 +3789,7 @@
       }
     },
     "New branch name" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
