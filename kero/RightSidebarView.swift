@@ -1184,15 +1184,17 @@ private struct GitPanel: View {
                     return .handled
                 }
 
-            HStack(spacing: 4) {
-                actionButton(
-                    icon: "checkmark",
-                    title: commitButtonTitle,
-                    enabled: canCommit(includeAll: false),
-                    help: String(localized: "Commit staged changes (⌘Return)"),
-                    action: performPrimaryAction
-                )
-                commitMenu
+            if !showSyncButton || canCommit(includeAll: false) {
+                HStack(spacing: 4) {
+                    actionButton(
+                        icon: "checkmark",
+                        title: commitButtonTitle,
+                        enabled: canCommit(includeAll: false),
+                        help: String(localized: "Commit staged changes (⌘Return)"),
+                        action: performPrimaryAction
+                    )
+                    commitMenu
+                }
             }
 
             if showSyncButton {
