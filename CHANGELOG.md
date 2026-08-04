@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.40]
+
 - Edit live worktree changes directly in the diff view, with remembered Review/Edit and Unified/Split controls plus normal save/discard handling
 - Fix modified special keys and application-keypad input in Alacritty terminals, including Shift-Enter for multiline prompts in Claude Code
 - Fix: Show a green Clean status for unchanged repositories and include untracked files in the toolbar's added-line count
