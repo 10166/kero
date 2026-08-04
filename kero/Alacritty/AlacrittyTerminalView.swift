@@ -54,6 +54,9 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     private var modifierMonitor: Any?
     private var isPointerInside = false
     private var isCommandPressed = false
+    /// The pane's base pointer: iBeam until a program asks for another shape
+    /// with OSC 22, matching the `.text` default of Kero's Ghostty panes.
+    private var mouseShapeCursor: NSCursor = .iBeam
     private var reportingMouseButton = false
     private var lastReportedFocus: Bool?
     private var cursorTimer: Timer?
@@ -962,6 +965,17 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
                     durationNanos: nil
                 )
             )
+        case KERO_EVENT_MOUSE_SHAPE:
+            let name = String(decoding: payload, as: UTF8.self)
+            guard let cursor = Self.cursor(mouseShape: name), cursor !== mouseShapeCursor
+            else { return }
+            mouseShapeCursor = cursor
+            // The pointer is usually already over the pane when a program
+            // changes shape, so apply it now rather than on the next move —
+            // unless a cmd-hovered link is showing the pointing hand.
+            if isPointerInside, hoveredURL == nil {
+                cursor.set()
+            }
         default:
             break
         }
@@ -974,6 +988,32 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         case 2: .error
         case 3: .indeterminate
         case 4: .pause
+        default: nil
+        }
+    }
+
+    /// Closest AppKit cursor for an OSC 22 pointer-shape name — the same CSS
+    /// cursor keywords and fallbacks as Kero's Ghostty panes, where macOS has
+    /// no public cursor for a handful of shapes (help, progress/wait, the
+    /// diagonal resizes). Unknown names are nil so they leave the pointer
+    /// alone instead of quietly becoming an arrow.
+    private static func cursor(mouseShape name: String) -> NSCursor? {
+        switch name {
+        case "text": .iBeam
+        case "vertical-text": .iBeamCursorForVerticalLayout
+        case "pointer": .pointingHand
+        case "context-menu": .contextualMenu
+        case "cell", "crosshair": .crosshair
+        case "alias": .dragLink
+        case "copy": .dragCopy
+        case "no-drop", "not-allowed": .operationNotAllowed
+        case "grab", "all-scroll": .openHand
+        case "grabbing", "move": .closedHand
+        case "col-resize", "e-resize", "w-resize", "ew-resize": .resizeLeftRight
+        case "row-resize", "n-resize", "s-resize", "ns-resize": .resizeUpDown
+        case "default", "help", "progress", "wait",
+             "ne-resize", "nw-resize", "se-resize", "sw-resize",
+             "nesw-resize", "nwse-resize", "zoom-in", "zoom-out": .arrow
         default: nil
         }
     }
@@ -1393,13 +1433,13 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         isCommandPressed = modifierFlags.contains(.command)
         guard isCommandPressed else {
             updateHoveredURL(nil)
-            NSCursor.iBeam.set()
+            mouseShapeCursor.set()
             return
         }
 
         let hit = url(at: gridPoint(at: localPoint))
         updateHoveredURL(hit)
-        (hit == nil ? NSCursor.iBeam : NSCursor.pointingHand).set()
+        (hit == nil ? mouseShapeCursor : NSCursor.pointingHand).set()
     }
 
     private func updateHoveredURL(_ hit: URLHit?) {
@@ -1441,7 +1481,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             hoveredURL = hit
             needsUnconditionalRedraw = true
         }
-        (hit == nil ? NSCursor.iBeam : NSCursor.pointingHand).set()
+        (hit == nil ? mouseShapeCursor : NSCursor.pointingHand).set()
     }
 
     override func scrollWheel(with event: NSEvent) {
