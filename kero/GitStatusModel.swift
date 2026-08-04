@@ -1158,19 +1158,23 @@ final class GitStatusModel: nonisolated ObservableObject {
         let outData = PipeData()
         let errData = PipeData()
         let readers = DispatchGroup()
+        // These readers are on the synchronous completion path below. Match
+        // the caller so a user-initiated Git request never waits on utility
+        // threads, while background refreshes keep their lower priority.
+        let readerQualityOfService = Thread.current.qualityOfService
         readers.enter()
         let stdoutReader = Thread {
             outData.value = stdout.fileHandleForReading.readDataToEndOfFile()
             readers.leave()
         }
-        stdoutReader.qualityOfService = .utility
+        stdoutReader.qualityOfService = readerQualityOfService
         stdoutReader.start()
         readers.enter()
         let stderrReader = Thread {
             errData.value = stderr.fileHandleForReading.readDataToEndOfFile()
             readers.leave()
         }
-        stderrReader.qualityOfService = .utility
+        stderrReader.qualityOfService = readerQualityOfService
         stderrReader.start()
         var timedOut = false
         if let timeout {

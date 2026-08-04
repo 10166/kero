@@ -355,6 +355,9 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         let errData = DiffPipeData()
         let captureLimit = maxBytes + 1
         let readers = DispatchGroup()
+        // Pipe EOF is part of this synchronous Git operation. Matching the
+        // caller avoids a user-initiated diff load waiting on utility readers.
+        let readerQualityOfService = Thread.current.qualityOfService
         readers.enter()
         let stdoutReader = Thread {
             // Drain the pipe so Git cannot deadlock, but retain at most one
@@ -376,14 +379,14 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
             }
             readers.leave()
         }
-        stdoutReader.qualityOfService = .utility
+        stdoutReader.qualityOfService = readerQualityOfService
         stdoutReader.start()
         readers.enter()
         let stderrReader = Thread {
             errData.value = stderr.fileHandleForReading.readDataToEndOfFile()
             readers.leave()
         }
-        stderrReader.qualityOfService = .utility
+        stderrReader.qualityOfService = readerQualityOfService
         stderrReader.start()
         process.waitUntilExit()
         readers.wait()
