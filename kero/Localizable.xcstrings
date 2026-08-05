@@ -260,6 +260,9 @@
     "%lld" : {
       "shouldTranslate" : false
     },
+    "%lld fps" : {
+
+    },
     "%lld incoming commits" : {
       "localizations" : {
         "en" : {
@@ -3190,6 +3193,9 @@
         }
       }
     },
+    "Hide FPS Counter" : {
+
+    },
     "Hide Git Output" : {
       "localizations" : {
         "ja" : {
@@ -5858,6 +5864,9 @@
           }
         }
       }
+    },
+    "Show FPS Counter" : {
+
     },
     "Show Git Output" : {
       "localizations" : {
