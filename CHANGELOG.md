@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- Prevent a rare crash while using the Ctrl-Tab switcher
+
 ## [0.1.43]
 
 - Command-click local file paths in the terminal to reveal them in Finder, or Command-right-click paths and URLs to open them in new file or browser tabs and panes
