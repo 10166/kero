@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.44]
+
 - Prevent a rare crash while using the Ctrl-Tab switcher
 
 ## [0.1.43]
