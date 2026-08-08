@@ -1,16 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "[ \"$KERO_AUTOMATION\" = \"1\" ] || exit 0; command -v kero >/dev/null 2>&1 || exit 0; exec kero +agent _integration grok idle # KERO_INTEGRATION_ID=grok",
-            "timeout": 2
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [

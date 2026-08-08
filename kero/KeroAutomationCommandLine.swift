@@ -229,14 +229,21 @@ enum KeroAutomationCommandLine {
               phase == .working || phase == .blocked || phase == .idle
         else { return }
 
-        if arguments.count == 3 {
-            guard arguments[2] == "--genuine-stop",
+        let isGenuineStop = arguments.count == 3
+            && arguments[2] == "--genuine-stop"
+        if phase == .idle {
+            // Process recognition owns startup idle. The only lifecycle event
+            // allowed to end a Grok turn is a validated genuine Stop, which
+            // also makes older cached SessionStart hooks harmless.
+            guard isGenuineStop,
                   let event = try? JSONDecoder().decode(
                     KeroJSONValue.self,
                     from: FileHandle.standardInput.readDataToEndOfFile()
                   ),
                   event.objectValue?["reason"]?.stringValue == "end_turn"
             else { return }
+        } else if arguments.count != 2 {
+            return
         }
 
         guard let connection = try? AppConnection() else { return }
@@ -1017,13 +1024,16 @@ enum KeroAutomationCommandLine {
            lifecycle state. Raw +pane send is a visibly separate escape hatch
            and can interact with any terminal program.
         6. A recognized process Kero launched is created until its first prompt.
-           The model is never asked to report lifecycle. Kero uses a complete
-           native hook/plugin when installed and repeated process-scoped live
-           terminal observations otherwise. Unseen idle is presented as done.
+           The model is never asked to report lifecycle. Kero uses provider-native
+           lifecycle events as semantic authorities when available and repeated
+           process-scoped live terminal observations otherwise. Unseen idle is
+           presented as done.
         7. The optional kero-automation Agent Skill teaches this workflow to
            compatible agents. Enable AI in Settings or install it explicitly
            with `kero +agent skill install`. The AI setting also manages only
            the provider integrations Kero can use as lifecycle authorities.
+           Both the skill and those integrations link to Kero's app bundle so
+           app updates do not leave stale copies installed.
         """)
     }
 }

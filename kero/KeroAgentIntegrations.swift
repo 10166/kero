@@ -9,7 +9,8 @@ import Foundation
 /// cover an interactive turn. Screen observation may refine native working
 /// state to an approval blocker, but native events remain authoritative for
 /// completion. Other supported agents use process identity plus screen
-/// detection alone.
+/// detection alone. Managed integrations are links into the app bundle so a
+/// Kero update cannot leave copied hook/plugin code stale.
 enum KeroAgentIntegrations {
     enum Kind: String, CaseIterable {
         case pi
@@ -36,6 +37,11 @@ enum KeroAgentIntegrations {
                     ["AgentIntegrations/grok", "grok", nil]
                 )
             }
+        }
+
+        var resourceFileName: String {
+            let resource = resource
+            return "\(resource.name).\(resource.extension)"
         }
 
         func installationRoot(
@@ -109,13 +115,13 @@ enum KeroAgentIntegrations {
         for kind in Kind.allCases {
             let root = kind.installationRoot(homeURL: homeURL, environment: environment)
             guard isDirectory(root) else { continue }
-            _ = try source(for: kind, bundle: bundle)
+            let source = try source(for: kind, bundle: bundle)
             let destination = kind.destinationURL(
                 homeURL: homeURL,
                 environment: environment
             )
-            if FileManager.default.fileExists(atPath: destination.path),
-               !isManaged(destination, kind: kind) {
+            if itemType(at: destination) != nil,
+               !isManaged(destination, kind: kind, sourceURL: source.url) {
                 throw IntegrationError.message(
                     "The \(kind.rawValue) integration at \(destination.path) is not managed by Kero."
                 )
@@ -141,11 +147,16 @@ enum KeroAgentIntegrations {
                 homeURL: homeURL,
                 environment: environment
             )
-            try FileManager.default.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try source.data.write(to: destination, options: .atomic)
+            if isCurrentLink(destination, sourceURL: source.url) { continue }
+            // Recheck ownership after the all-destination preflight so a file
+            // changed concurrently is never replaced.
+            if itemType(at: destination) != nil,
+               !isManaged(destination, kind: kind, sourceURL: source.url) {
+                throw IntegrationError.message(
+                    "The \(kind.rawValue) integration at \(destination.path) changed while Kero was enabling AI."
+                )
+            }
+            try replaceWithLink(at: destination, sourceURL: source.url)
         }
     }
 
@@ -158,8 +169,8 @@ enum KeroAgentIntegrations {
                 homeURL: homeURL,
                 environment: environment
             )
-            guard FileManager.default.fileExists(atPath: destination.path) else { continue }
-            guard isManaged(destination, kind: kind) else {
+            guard itemType(at: destination) != nil else { continue }
+            guard isManaged(destination, kind: kind, sourceURL: nil) else {
                 throw IntegrationError.message(
                     "The \(kind.rawValue) integration at \(destination.path) has local changes."
                 )
@@ -177,14 +188,14 @@ enum KeroAgentIntegrations {
                 homeURL: homeURL,
                 environment: environment
             )
-            if FileManager.default.fileExists(atPath: destination.path) {
+            if itemType(at: destination) != nil {
                 try FileManager.default.removeItem(at: destination)
             }
         }
     }
 
     private struct Source {
-        let data: Data
+        let url: URL
     }
 
     private static func source(for kind: Kind, bundle: Bundle) throws -> Source {
@@ -198,19 +209,87 @@ enum KeroAgentIntegrations {
             let data = try Data(contentsOf: url)
             guard let text = String(data: data, encoding: .utf8),
                   text.contains(kind.marker) else { continue }
-            return Source(data: data)
+            return Source(url: url.standardizedFileURL)
         }
         throw IntegrationError.message(
             "Kero's bundled \(kind.rawValue) lifecycle integration is missing."
         )
     }
 
-    private static func isManaged(_ url: URL, kind: Kind) -> Bool {
+    private static func isManaged(
+        _ url: URL,
+        kind: Kind,
+        sourceURL: URL?
+    ) -> Bool {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
               data.count <= 256 * 1_024,
               let text = String(data: data, encoding: .utf8)
+        else {
+            // A moved or replaced app can leave Kero's absolute resource link
+            // temporarily dangling. Recognize only its exact resource name
+            // beneath an app bundle so launch reconciliation can repair it.
+            guard itemType(at: url) == .typeSymbolicLink,
+                  let target = symbolicLinkTarget(at: url),
+                  target.lastPathComponent == kind.resourceFileName,
+                  target.path.contains(".app/Contents/Resources/")
+            else { return false }
+            return true
+        }
+        if text.contains(kind.marker) { return true }
+        guard let sourceURL else { return false }
+        return isCurrentLink(url, sourceURL: sourceURL)
+    }
+
+    private static func isCurrentLink(_ url: URL, sourceURL: URL) -> Bool {
+        guard itemType(at: url) == .typeSymbolicLink,
+              let target = symbolicLinkTarget(at: url)
         else { return false }
-        return text.contains(kind.marker)
+        return target.standardizedFileURL.path == sourceURL.standardizedFileURL.path
+    }
+
+    private static func symbolicLinkTarget(at url: URL) -> URL? {
+        guard let path = try? FileManager.default.destinationOfSymbolicLink(
+            atPath: url.path
+        ) else { return nil }
+        if path.hasPrefix("/") { return URL(fileURLWithPath: path) }
+        return url.deletingLastPathComponent().appendingPathComponent(path)
+    }
+
+    private static func replaceWithLink(at destination: URL, sourceURL: URL) throws {
+        let fileManager = FileManager.default
+        let parent = destination.deletingLastPathComponent()
+        try fileManager.createDirectory(
+            at: parent,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755]
+        )
+
+        let stem = destination.lastPathComponent
+        let staging = parent.appendingPathComponent(
+            ".\(stem).kero-staging-\(UUID().uuidString)"
+        )
+        let backup = parent.appendingPathComponent(
+            ".\(stem).kero-backup-\(UUID().uuidString)"
+        )
+        defer { try? fileManager.removeItem(at: staging) }
+        try fileManager.createSymbolicLink(
+            atPath: staging.path,
+            withDestinationPath: sourceURL.standardizedFileURL.path
+        )
+
+        let existed = itemType(at: destination) != nil
+        if existed {
+            try fileManager.moveItem(at: destination, to: backup)
+        }
+        do {
+            try fileManager.moveItem(at: staging, to: destination)
+        } catch {
+            if existed, itemType(at: destination) == nil {
+                try? fileManager.moveItem(at: backup, to: destination)
+            }
+            throw error
+        }
+        if existed { try? fileManager.removeItem(at: backup) }
     }
 
     private static func isDirectory(_ url: URL) -> Bool {
@@ -219,6 +298,11 @@ enum KeroAgentIntegrations {
             atPath: url.path,
             isDirectory: &isDirectory
         ) && isDirectory.boolValue
+    }
+
+    private static func itemType(at url: URL) -> FileAttributeType? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes?[.type] as? FileAttributeType
     }
 
     private static func expandedURL(_ path: String, homeURL: URL) -> URL {

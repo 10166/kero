@@ -204,9 +204,9 @@ final class AppSettings: nonisolated ObservableObject {
         didSet { save() }
     }
 
-    /// Install Kero's shared coordination skill plus the native lifecycle
-    /// integrations whose provider APIs cover a complete interactive turn.
-    /// Every other agent continues to use passive process/screen observation.
+    /// Link Kero's shared coordination skill plus the native lifecycle
+    /// integrations whose provider APIs provide semantic turn events. Every
+    /// other agent continues to use passive process/screen observation.
     @Published private(set) var aiEnabled: Bool {
         didSet { save() }
     }
