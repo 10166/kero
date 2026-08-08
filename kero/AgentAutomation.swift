@@ -10,6 +10,7 @@ enum KeroAgentKind: String, CaseIterable, Codable, Sendable {
     case codex
     case claude
     case gemini
+    case grok
     case opencode
     case cursor = "cursor-agent"
     case aider
@@ -21,6 +22,7 @@ enum KeroAgentKind: String, CaseIterable, Codable, Sendable {
         case .codex: return "Codex"
         case .claude: return "Claude Code"
         case .gemini: return "Gemini CLI"
+        case .grok: return "Grok Build"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor Agent"
         case .aider: return "Aider"
@@ -75,6 +77,16 @@ enum KeroAgentKind: String, CaseIterable, Codable, Sendable {
             name.removeLast(suffix.count)
             break
         }
+        if name == "grok" || name == "xai-grok-pager" {
+            return .grok
+        }
+        // Official installs resolve `~/.grok/bin/grok` to a versioned binary
+        // such as `grok-1.0.0-macos-aarch64`; foreground PID inspection sees
+        // that target even though argv[0] usually preserves the `grok` link.
+        if name.hasPrefix("grok-"),
+           name.contains("-macos-") || name.contains("-linux-") {
+            return .grok
+        }
         switch name {
         case "codex": return .codex
         case "claude": return .claude
@@ -101,6 +113,7 @@ enum KeroAgentKind: String, CaseIterable, Codable, Sendable {
         if normalized.contains("/@openai/codex/") { return .codex }
         if normalized.contains("/@anthropic-ai/claude-code/") { return .claude }
         if normalized.contains("/gemini-cli/") { return .gemini }
+        if normalized.contains("/grok-dev/") { return .grok }
         if normalized.contains("/opencode-ai/") { return .opencode }
         if normalized.contains("/cursor-agent/") { return .cursor }
         if normalized.contains("/aider-chat/") || normalized.contains("/aider_chat/") {
@@ -277,6 +290,14 @@ private nonisolated enum KeroAgentScreenClassifier {
                 || (recent.contains("/btw") && recent.contains("esc to close"))
         case .gemini:
             return recent.contains("esc to cancel")
+        case .grok:
+            // Grok's default title begins with its spinner and includes the
+            // current activity label while a turn is active.
+            return hasBraillePrefix(lowerTitle)
+                || lowerTitle.contains("responding")
+                || lowerTitle.contains("running tool")
+                || lowerTitle.contains("compacting")
+                || lowerTitle.contains("retrying")
         case .opencode:
             return recent.contains("esc to interrupt")
                 || recent.contains("ctrl+c to interrupt")
@@ -906,12 +927,24 @@ extension TerminalSession {
         }
 
         let screenCanSettle = agentObservation.screenPromptedAt != nil
-            && agentObservation.integrationPhase == nil
+            && (agentObservation.integrationPhase == nil
+                || agentObservation.integrationPhase == .working)
             && (agentStatus?.authority == .command
                 || agentStatus?.authority == .screen
-                || agentStatus?.authority == .process)
+                || agentStatus?.authority == .process
+                || agentStatus?.authority == .integration)
         if screenCanSettle {
             if let inferred = automationScreenFallback(kind: kind, isFocused: isFocused) {
+                if agentObservation.integrationPhase == .working,
+                   inferred.phase == .idle || inferred.phase == .done {
+                    // A native start event without a matching stop can happen
+                    // when a CLI turn is cancelled. Let the settled screen
+                    // close that stale turn; the next native prompt event will
+                    // promote it back to working.
+                    agentObservation.integrationPhase = .idle
+                    agentObservation.integrationReason = inferred.reason
+                    agentObservation.integrationTurnActive = false
+                }
                 updateAutomationAgentStatus(
                     alias: alias,
                     kind: kind,

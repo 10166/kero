@@ -22,6 +22,24 @@ input as separate actions.
 Use `kero +agent explain` for the lifecycle and security contract, and use
 `kero +agent --help` or `kero +pane --help` for complete syntax.
 
+## Supported agents
+
+Use these exact values with `kero +agent start --kind`:
+
+- `codex` — Codex
+- `claude` — Claude Code
+- `gemini` — Gemini CLI
+- `grok` — Grok Build
+- `opencode` — OpenCode
+- `cursor-agent` — Cursor Agent
+- `aider` — Aider
+- `amp` — Amp
+- `pi` — Pi
+
+The selected CLI must already be installed, authenticated, and available on
+the terminal's `PATH`. Kero also recognizes these agents when the user launches
+them directly; inspect `kero +agent list` before starting a duplicate.
+
 ## Delegate to another pane
 
 Follow this sequence:

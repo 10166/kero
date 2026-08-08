@@ -18,6 +18,10 @@ enum KeroAutomationCommandLine {
             printAgentContract()
             return
         }
+        if namespace == "+agent", arguments.first == "_integration" {
+            runAgentIntegration(Array(arguments.dropFirst()))
+            return
+        }
         if namespace == "+agent", arguments.first == "skill" {
             try runAgentSkill(Array(arguments.dropFirst()))
             return
@@ -215,6 +219,37 @@ enum KeroAutomationCommandLine {
 
     // MARK: - Agent commands
 
+    /// Private entry point for lifecycle hooks installed by Kero. It is
+    /// intentionally absent from help and never appears in an agent prompt.
+    /// Hook failures stay passive: screen detection remains the fallback.
+    private static func runAgentIntegration(_ arguments: [String]) {
+        guard arguments.count == 2 || arguments.count == 3,
+              arguments[0] == "grok",
+              let phase = KeroAgentPhase(rawValue: arguments[1]),
+              phase == .working || phase == .blocked || phase == .idle
+        else { return }
+
+        if arguments.count == 3 {
+            guard arguments[2] == "--genuine-stop",
+                  let event = try? JSONDecoder().decode(
+                    KeroJSONValue.self,
+                    from: FileHandle.standardInput.readDataToEndOfFile()
+                  ),
+                  event.objectValue?["reason"]?.stringValue == "end_turn"
+            else { return }
+        }
+
+        guard let connection = try? AppConnection() else { return }
+        _ = try? connection.automationRequest(
+            method: "agent.report",
+            params: [
+                "state": .string(phase.rawValue),
+                "reason": .string("Grok lifecycle hook"),
+            ],
+            timeout: 1
+        )
+    }
+
     private static func runAgentSkill(_ arguments: [String]) throws {
         guard let command = arguments.first else {
             printAgentSkillHelp()
@@ -406,6 +441,7 @@ enum KeroAutomationCommandLine {
             switch agent {
             case "codex": "Codex"
             case "gemini": "Gemini"
+            case "grok": "Grok"
             case "cursor": "Cursor"
             case "opencode": "OpenCode"
             case "claude": "Claude"
@@ -926,9 +962,9 @@ enum KeroAutomationCommandLine {
           kero +agent skill <path|print|status|install|uninstall> [options]
           kero +agent explain
 
-        Supported kinds: codex, claude, gemini, opencode, cursor-agent, aider,
-        amp, and pi. Agent start requires an existing available shell and never
-        creates layout; it returns after Kero recognizes the launched process.
+        Supported kinds: codex, claude, gemini, grok, opencode, cursor-agent,
+        aider, amp, and pi. Agent start requires an existing available shell and
+        never creates layout; it returns after Kero recognizes the launched process.
         Guarded prompts accept agents in created, working, idle, or done. While
         an agent is working, its CLI decides whether input steers the active
         turn or queues it. Use +pane send only when raw input is intentional.
@@ -950,9 +986,9 @@ enum KeroAutomationCommandLine {
           kero +agent skill install [--provider PROVIDER] [--force] [--json]
           kero +agent skill uninstall [--provider PROVIDER] [--force] [--json]
 
-        PROVIDER may be all, universal, codex, claude, gemini, cursor,
+        PROVIDER may be all, universal, codex, claude, gemini, grok, cursor,
         opencode, amp, or pi. The default is all. Codex, Gemini, Cursor,
-        OpenCode, Amp, and Pi share ~/.agents/skills; Claude uses
+        Grok, OpenCode, Amp, and Pi share ~/.agents/skills; Claude uses
         ~/.claude/skills. Existing local changes are never replaced or removed
         without --force. Installation uses symlinks to Kero's app bundle, so
         app updates update the skill without reinstalling it. Reload skills or

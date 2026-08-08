@@ -7,8 +7,8 @@ import Foundation
 
 /// Loads Kero's canonical Agent Skill from the app bundle and manages
 /// user-scoped discovery links. The shared `.agents` destination covers Codex,
-/// Gemini, Cursor, OpenCode, Amp, and Pi; Claude currently requires its own
-/// root.
+/// Gemini, Grok, Cursor, OpenCode, Amp, and Pi; Claude currently requires its
+/// own root.
 enum KeroAutomationSkill {
     static let name = "kero-automation"
 
@@ -25,7 +25,9 @@ enum KeroAutomationSkill {
 
         var agents: [String] {
             switch self {
-            case .universal: ["codex", "gemini", "cursor", "opencode", "amp", "pi"]
+            case .universal: [
+                "codex", "gemini", "grok", "cursor", "opencode", "amp", "pi",
+            ]
             case .claude: ["claude"]
             }
         }
@@ -107,7 +109,7 @@ enum KeroAutomationSkill {
         switch provider.lowercased() {
         case "all":
             return Destination.allCases
-        case "universal", "agents", "codex", "gemini", "cursor",
+        case "universal", "agents", "codex", "gemini", "grok", "cursor",
              "cursor-agent", "opencode", "amp", "pi":
             return [.universal]
         case "claude":
@@ -115,7 +117,7 @@ enum KeroAutomationSkill {
         default:
             throw SkillError.message(
                 "Unsupported skill provider \(provider.debugDescription). "
-                    + "Use all, universal, codex, claude, gemini, cursor, "
+                    + "Use all, universal, codex, claude, gemini, grok, cursor, "
                     + "opencode, amp, or pi."
             )
         }

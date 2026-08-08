@@ -6,13 +6,14 @@
 import Foundation
 
 /// Native lifecycle integrations for agent CLIs whose public event surfaces
-/// cover a full interactive turn. Other supported agents continue to use
-/// process identity plus screen detection; partial hooks must never override
-/// that more complete lifecycle source.
+/// cover a full interactive turn. Screen observation still supplies approval
+/// state and cancellation recovery where a provider's lifecycle events do not.
+/// Other supported agents use process identity plus screen detection alone.
 enum KeroAgentIntegrations {
     enum Kind: String, CaseIterable {
         case pi
         case opencode
+        case grok
 
         var marker: String { "KERO_INTEGRATION_ID=\(rawValue)" }
 
@@ -27,6 +28,11 @@ enum KeroAgentIntegrations {
                 return (
                     "kero-agent-state", "js",
                     ["AgentIntegrations/opencode", "opencode", nil]
+                )
+            case .grok:
+                return (
+                    "kero-agent-state.grok", "json",
+                    ["AgentIntegrations/grok", "grok", nil]
                 )
             }
         }
@@ -47,6 +53,12 @@ enum KeroAgentIntegrations {
                     ".config/opencode",
                     isDirectory: true
                 )
+            case .grok:
+                if let configured = environment["GROK_HOME"],
+                   !configured.isEmpty {
+                    return expandedURL(configured, homeURL: homeURL)
+                }
+                return homeURL.appendingPathComponent(".grok", isDirectory: true)
             }
         }
 
@@ -64,6 +76,11 @@ enum KeroAgentIntegrations {
             case .opencode:
                 return root.appendingPathComponent(
                     "plugins/kero-agent-state.js",
+                    isDirectory: false
+                )
+            case .grok:
+                return root.appendingPathComponent(
+                    "hooks/kero-agent-state.json",
                     isDirectory: false
                 )
             }
