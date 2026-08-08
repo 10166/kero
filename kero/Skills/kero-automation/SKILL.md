@@ -36,10 +36,6 @@ Use these exact values with `kero +agent start --kind`:
 - `amp` — Amp
 - `pi` — Pi
 
-The selected CLI must already be installed, authenticated, and available on
-the terminal's `PATH`. Kero also recognizes these agents when the user launches
-them directly; inspect `kero +agent list` before starting a duplicate.
-
 ## Delegate to another pane
 
 Follow this sequence:
