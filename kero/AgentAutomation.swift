@@ -926,24 +926,23 @@ extension TerminalSession {
             return
         }
 
-        let screenCanSettle = agentObservation.screenPromptedAt != nil
+        let screenCanClassify = agentObservation.screenPromptedAt != nil
             && (agentObservation.integrationPhase == nil
                 || agentObservation.integrationPhase == .working)
             && (agentStatus?.authority == .command
                 || agentStatus?.authority == .screen
                 || agentStatus?.authority == .process
                 || agentStatus?.authority == .integration)
-        if screenCanSettle {
+        if screenCanClassify {
             if let inferred = automationScreenFallback(kind: kind, isFocused: isFocused) {
                 if agentObservation.integrationPhase == .working,
                    inferred.phase == .idle || inferred.phase == .done {
-                    // A native start event without a matching stop can happen
-                    // when a CLI turn is cancelled. Let the settled screen
-                    // close that stale turn; the next native prompt event will
-                    // promote it back to working.
-                    agentObservation.integrationPhase = .idle
-                    agentObservation.integrationReason = inferred.reason
-                    agentObservation.integrationTurnActive = false
+                    // A freshly submitted full-screen agent can briefly paint
+                    // an idle-looking frame before its first response. Native
+                    // lifecycle owns completion once it has reported working;
+                    // the screen may refine that state to working/blocked but
+                    // must never manufacture an early completion.
+                    return
                 }
                 updateAutomationAgentStatus(
                     alias: alias,

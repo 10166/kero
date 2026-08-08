@@ -6,9 +6,10 @@
 import Foundation
 
 /// Native lifecycle integrations for agent CLIs whose public event surfaces
-/// cover a full interactive turn. Screen observation still supplies approval
-/// state and cancellation recovery where a provider's lifecycle events do not.
-/// Other supported agents use process identity plus screen detection alone.
+/// cover an interactive turn. Screen observation may refine native working
+/// state to an approval blocker, but native events remain authoritative for
+/// completion. Other supported agents use process identity plus screen
+/// detection alone.
 enum KeroAgentIntegrations {
     enum Kind: String, CaseIterable {
         case pi
