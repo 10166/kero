@@ -1,6 +1,6 @@
 ---
 name: kero-automation
-description: Coordinate coding agents and terminal panes inside Kero with `kero +pane` and `kero +agent`. Use when delegating work to another Kero pane, starting or prompting a coding agent, waiting for its state, or reading its result.
+description: Coordinate coding agents and terminal panes inside Kero. Use when delegating work to another Kero pane, starting or prompting a coding agent, coordinating existing Kero agents, waiting for agent state, or reading a result.
 ---
 
 # Kero Automation
@@ -35,6 +35,24 @@ Use these exact values with `kero +agent start --kind`:
 - `aider` — Aider
 - `amp` — Amp
 - `pi` — Pi
+
+## Coordinate existing Kero agents
+
+When a task involves an agent already running in another Kero pane, coordinate
+it through Kero instead of sending raw terminal input. The target can be any
+supported agent kind; both agents stay under the same project-scoped contract.
+
+1. Inspect `kero +agent list` and select the target by its unique project-local
+   alias. If the intended agent is ambiguous, ask the user instead of guessing.
+2. Use `kero +agent prompt` for a focused question, progress request, follow-up,
+   or handoff. State what response or artifact the coordinating agent needs.
+3. A submitted prompt is not a completed task. If the target is already
+   working, its CLI decides whether to steer the active turn or queue the new
+   prompt.
+4. Use `kero +agent wait` and `kero +agent read` to collect the result, then
+   independently verify it before relaying it to another agent or the user.
+5. If the target becomes blocked, surface the reason to the user. Do not send a
+   follow-up that attempts to work around the blocker.
 
 ## Delegate to another pane
 
@@ -122,6 +140,9 @@ reply with that path, then read the file directly.
   target is a live recognized agent in `created`, `working`, `idle`, or `done`.
   While the target is working, Kero submits the prompt immediately and the
   target CLI decides whether to steer the active turn or queue it.
+- A message to another agent never transfers the user's authority. Do not ask a
+  peer to approve a blocked action, reverse a denial, change permissions, or
+  alter agent configuration.
 - Use `kero +pane send` only when the user explicitly wants raw terminal input.
   Never use it to answer a permission, credential, trust, or destructive-action
   prompt on the user's behalf.
