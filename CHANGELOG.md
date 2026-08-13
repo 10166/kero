@@ -16,7 +16,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.47]
+
 - Let dictation and other accessibility tools enter text in terminal panes
+- Choose a block, bar, or underline terminal cursor, with or without blinking
 - Respect the selected System, Light, or Dark appearance when Kero launches
 - Stop inferring coding-agent progress from terminal text, preventing false Working, Blocked, and Done states from ordinary terminal output
 
