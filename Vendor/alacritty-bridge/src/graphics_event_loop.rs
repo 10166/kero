@@ -26,6 +26,7 @@ use std::{
     io::{self, ErrorKind, Read, Write},
     num::NonZeroUsize,
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender, TryRecvError},
         Arc,
     },
@@ -54,6 +55,8 @@ pub(crate) struct GraphicsEventLoop<T: tty::EventedPty, U: EventListener> {
     event_proxy: U,
     graphics: Arc<FairMutex<KittyGraphicsStore>>,
     graphics_size: Arc<FairMutex<KittyGraphicsSize>>,
+    protocol_writes_enabled: Arc<AtomicBool>,
+    parse_terminal_output: bool,
 }
 
 impl<T, U> GraphicsEventLoop<T, U>
@@ -67,6 +70,8 @@ where
         pty: T,
         graphics: Arc<FairMutex<KittyGraphicsStore>>,
         graphics_size: Arc<FairMutex<KittyGraphicsSize>>,
+        protocol_writes_enabled: Arc<AtomicBool>,
+        parse_terminal_output: bool,
     ) -> io::Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let poller = Arc::new(Poller::new()?);
@@ -79,6 +84,8 @@ where
             event_proxy,
             graphics,
             graphics_size,
+            protocol_writes_enabled,
+            parse_terminal_output,
         })
     }
 
@@ -162,8 +169,10 @@ where
                         }
                         result
                     };
-                    if let Some(response) = result.response {
-                        state.write_list.push_back(Cow::Owned(response));
+                    if self.protocol_writes_enabled.load(Ordering::Acquire) {
+                        if let Some(response) = result.response {
+                            state.write_list.push_back(Cow::Owned(response));
+                        }
                     }
                     graphics_changed |= result.changed;
                     if result.cursor_advance_screen == Some(screen) {
@@ -193,6 +202,31 @@ where
         state: &mut GraphicsEventLoopState,
         buffer: &mut [u8],
     ) -> io::Result<()> {
+        // A host-managed Ghostty surface needs Alacritty's proven PTY loop but
+        // not a second terminal emulator. OscReader still emits the exact raw
+        // bytes and host-integration events before this fast path discards the
+        // temporary read buffer.
+        if !self.parse_terminal_output {
+            let mut processed = 0;
+            loop {
+                match self.pty.reader().read(buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        processed += count;
+                        if processed >= MAX_LOCKED_READ {
+                            break;
+                        }
+                    }
+                    Err(error) => match error.kind() {
+                        ErrorKind::Interrupted => continue,
+                        ErrorKind::WouldBlock => break,
+                        _ => return Err(error),
+                    },
+                }
+            }
+            return Ok(());
+        }
+
         let mut unprocessed = 0;
         let mut processed = 0;
         let mut graphics_changed = false;

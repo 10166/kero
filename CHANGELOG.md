@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- Control terminal sessions from another Kero through a self-hosted, Google-authenticated relay, with end-to-end encrypted byte-transparent I/O, mirrored projects/tabs/splits, exclusive control, device revocation, and immediate local take-back
+
 ## [0.1.47]
 
 - Let dictation and other accessibility tools enter text in terminal panes

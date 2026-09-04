@@ -236,12 +236,12 @@ final class AgentAutomationMonitor {
 extension TerminalSession {
     var isShellAvailableForAutomation: Bool {
         guard !hasExited, let shellPid, shellPid > 0 else { return false }
-        return surface.foregroundPid == shellPid
+        return surface.foregroundProcessID == shellPid
             && commandLifecycle.phase != .executing
     }
 
     func isAutomationAgentRunning(kind: KeroAgentKind) -> Bool {
-        guard let foreground = surface.foregroundPid,
+        guard let foreground = surface.foregroundProcessID,
               foreground != shellPid else { return false }
         return KeroAgentKind.recognize(processID: foreground) == kind
     }
@@ -435,7 +435,7 @@ extension TerminalSession {
             phase: .working,
             authority: .command,
             reason: "Prompt submitted",
-            processID: surface.foregroundPid,
+            processID: surface.foregroundProcessID,
             unseen: false
         )
     }
@@ -444,7 +444,7 @@ extension TerminalSession {
         phase: KeroAgentPhase,
         reason: String?
     ) -> Bool {
-        let foreground = surface.foregroundPid
+        let foreground = surface.foregroundProcessID
         let rememberedProcess = agentStatus?.processID
         let recognized = [rememberedProcess, foreground]
             .compactMap { $0 }
@@ -532,7 +532,7 @@ extension TerminalSession {
     fileprivate func refreshAutomationAgentState(isFocused: Bool) {
         if isFocused { markAutomationAgentSeen() }
 
-        let foreground = surface.foregroundPid
+        let foreground = surface.foregroundProcessID
         let shell = shellPid
         let processIsAgent = foreground != nil && foreground != shell
         let detectedKind = processIsAgent

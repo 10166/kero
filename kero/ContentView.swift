@@ -208,7 +208,9 @@ struct ContentView: View {
                         }
                     }
                     Group {
-                        if let tab = manager.selectedProject?.selectedTab {
+                        if manager.selectedRemoteProject != nil {
+                            RemoteWorkspaceRepresentable(manager: manager)
+                        } else if let tab = manager.selectedProject?.selectedTab {
                             PaneLayoutView(
                                 tab: tab,
                                 tabSplitDrag: tabSplitDrag,
@@ -293,6 +295,10 @@ struct ContentView: View {
             tabSplitDrag.cancel()
             syncGit()
         }
+        .onChange(of: manager.selectedRemoteProject) {
+            tabSplitDrag.cancel()
+            syncGit()
+        }
         .onChange(of: manager.selectedSession?.id) { syncGit() }
         .onChange(of: manager.selectedSession?.workingDirectory) { syncGit() }
         .onChange(of: manager.selectedSession?.foregroundDirectoryPath) { syncGit() }
@@ -317,6 +323,7 @@ struct ContentView: View {
     /// its gaps — but a diff tab's own pane must stay clear so its web view
     /// (mounted in the stack behind) shows through.
     private var paneLayerIsOpaque: Bool {
+        if manager.selectedRemoteProject != nil { return true }
         guard let tab = manager.selectedProject?.selectedTab else { return true }
         return tab.diffs.isEmpty
     }
@@ -990,6 +997,16 @@ private struct MainHeaderView: View {
                                 - (manager.isPaneZoomed ? 32 : 0)
                         )
                     )
+                } else if manager.selectedRemoteProject != nil {
+                    RemoteTabsHeaderRepresentable(manager: manager)
+                        .frame(
+                            maxWidth: max(
+                                0,
+                                geo.size.width - leadingInset
+                                    - hiddenLeftSidebarControlWidth
+                                    - minimumWindowDragWidth - 16
+                            )
+                        )
                 }
                 WindowDragArea()
                     .frame(minWidth: minimumWindowDragWidth, maxWidth: .infinity)

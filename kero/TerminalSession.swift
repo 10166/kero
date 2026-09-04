@@ -25,6 +25,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     @Published var hasExited = false
     @Published private(set) var commandLifecycle = TerminalCommandLifecycle()
     @Published private(set) var terminalCellSize: CGSize?
+    @Published private(set) var isRemotelyControlled = false
     /// Recognized coding agent occupying this terminal, if any. The monitor
     /// reconciles foreground process identity with explicit lifecycle events.
     @Published var agentStatus: KeroAgentStatus?
@@ -47,6 +48,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     private var cachedShellPid: pid_t?
     private var lastHistorySnapshot: String?
     private var isTerminating = false
+    private var remoteOutputHandler: ((Data) -> Void)?
     private var commandExecutionStartedAtNanos: UInt64?
     /// Alternate-screen transcript paging must begin at the live prompt, never
     /// from text the user has scrolled back to inspect.
@@ -99,6 +101,10 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         super.init()
 
         surface.events = self
+        surface.onTakeBackRemoteControl = { [weak self] in
+            guard let self else { return }
+            RemoteControlService.shared.reclaim(sessionID: self.id)
+        }
         installOverlayScrollbar()
         applyTheme()
         AgentAutomationMonitor.shared.register(self)
@@ -147,11 +153,15 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// or been force-stopped. Detaching first can make a backend wait
     /// synchronously for a process that ignored SIGHUP.
     private func beginTeardown(processAlive: Bool, notifyExit: Bool) {
+        if isRemotelyControlled {
+            RemoteControlService.shared.reclaim(sessionID: id)
+        }
         // TerminalHostView normally clears these while dismantling, but close
         // teardown must not depend on a later SwiftUI reconciliation pass.
         // These callbacks originate on PaneView and capture this session.
         surface.setSurfaceVisible(false)
         surface.onBecomeFirstResponder = nil
+        surface.onTakeBackRemoteControl = nil
         surface.splitTarget.onSplit = nil
         surface.splitTarget.onNewBrowserTab = nil
         surface.splitTarget.onNewBrowserPane = nil
@@ -184,7 +194,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     private func signalTerminalJob(_ signal: Int32) {
         var pids = Set<pid_t>()
         if let shellPid { pids.insert(shellPid) }
-        if let foreground = surface.foregroundPid, foreground > 0 {
+        if let foreground = surface.foregroundProcessID, foreground > 0 {
             pids.insert(foreground)
         }
         for pid in pids where pid > 1 {
@@ -231,19 +241,55 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// keeps describing the old tree. This is deliberately a separate fact:
     /// `currentDirectoryPath` must stay true to the shell.
     var foregroundDirectoryPath: String? {
-        guard let foreground = surface.foregroundPid, foreground > 0,
+        guard let foreground = surface.foregroundProcessID, foreground > 0,
               foreground != shellPid
         else { return nil }
         return processWorkingDirectory(pid: foreground)
     }
 
     func sendCommand(_ text: String) {
+        guard !isRemotelyControlled else { return }
         surface.sendText(text)
+    }
+
+    func beginRemoteControl(
+        resize: RemoteResize,
+        output: @escaping (Data) -> Void
+    ) {
+        guard !isRemotelyControlled else { return }
+        isRemotelyControlled = true
+        remoteOutputHandler = output
+        surface.beginRemoteControl(resize: resize, output: output)
+    }
+
+    func endRemoteControl() {
+        guard isRemotelyControlled else { return }
+        surface.endRemoteControl()
+        remoteOutputHandler = nil
+        isRemotelyControlled = false
+    }
+
+    func receiveRemoteInput(_ data: Data) {
+        guard isRemotelyControlled else { return }
+        surface.receiveRemoteInput(data)
+    }
+
+    func applyRemoteResize(_ resize: RemoteResize) {
+        guard isRemotelyControlled else { return }
+        surface.beginRemoteControl(
+            resize: resize,
+            output: remoteOutputHandler ?? { _ in }
+        )
+    }
+
+    func remoteBootstrap() -> Data? {
+        surface.remoteBootstrap()
     }
 
     /// Clears the emulator's visible screen and scrollback, then asks the
     /// foreground shell to repaint its prompt at the top.
     func clear() {
+        guard !isRemotelyControlled else { return }
         surface.clearScreen()
     }
 
@@ -255,7 +301,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         guard captureLive else { return lastHistorySnapshot }
 
         let rootShellIsForeground = shellPid != nil
-            && surface.foregroundPid == shellPid
+            && surface.foregroundProcessID == shellPid
         if !rootShellIsForeground,
            !TerminalHistorySerializer.hasPrimaryScrollback(surface) {
             // A primary screen with no rows above the viewport and an

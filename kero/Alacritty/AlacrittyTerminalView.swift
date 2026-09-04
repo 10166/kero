@@ -23,6 +23,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         didSet { flushPendingEvents() }
     }
     var onBecomeFirstResponder: (() -> Void)?
+    var onTakeBackRemoteControl: (() -> Void)?
     let splitTarget = SplitMenuTarget()
 
     /// Matches the window padding Kero's Ghostty panes use, so a pane looks
@@ -63,6 +64,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     private var cursorBlinking = false
     private var cursorVisible = true
     private let progressBar = KeroTerminalProgressBarView(frame: .zero)
+    private let remoteControlBanner = RemoteControlBannerView(frame: .zero)
 
     /// Fractional scroll accumulator, so a trackpad's sub-line deltas add up
     /// to a row instead of being discarded.
@@ -70,6 +72,10 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     private var selectionAnchor: (line: Int, column: Int)?
     private let findState = AlacrittyFind()
     private var hoveredURL: URLHit?
+    private var isRemotelyControlled = false
+    private var remoteOutput: ((Data) -> Void)?
+    private var remoteConnection: RemoteTerminalConnection?
+    private var isRemoteRenderer = false
 
     private struct URLHit: Equatable {
         let value: String
@@ -115,6 +121,11 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         markedTextField.lineBreakMode = .byClipping
         addSubview(markedTextField)
         addSubview(progressBar)
+        remoteControlBanner.isHidden = true
+        remoteControlBanner.onTakeBack = { [weak self] in
+            self?.onTakeBackRemoteControl?()
+        }
+        addSubview(remoteControlBanner)
         AlacrittyRegistry.shared.register(self, for: token)
         NotificationCenter.default.addObserver(
             self,
@@ -145,6 +156,11 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     convenience init(launch: TerminalLaunch) {
         self.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         start(launch: launch)
+    }
+
+    convenience init(remoteConnection: RemoteTerminalConnection) {
+        self.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        start(remoteConnection: remoteConnection)
     }
 
     deinit {
@@ -187,6 +203,51 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         if handle == nil {
             NSLog("kero: failed to start the Alacritty backend for \(launch.program)")
             return
+        }
+    }
+
+    private func start(remoteConnection: RemoteTerminalConnection) {
+        isRemoteRenderer = true
+        self.remoteConnection = remoteConnection
+        let size = gridSize(for: bounds.size)
+        gridSize = size
+        var theme = AlacrittyTheme.current()
+        let launch = TerminalLaunch(
+            program: "/usr/bin/true",
+            arguments: [],
+            commandLine: "",
+            workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
+            environment: [:]
+        )
+        handle = launch.withCConfig(
+            columns: UInt16(size.columns),
+            rows: UInt16(size.rows),
+            cellWidth: UInt16(metrics.cellWidth.rounded()),
+            cellHeight: UInt16(metrics.cellHeight.rounded()),
+            scrollbackLines: Self.scrollbackLines,
+            cursorShape: AppSettings.shared.cursorShape.alacrittyValue,
+            cursorBlinking: AppSettings.shared.cursorBlinking,
+            suppressProtocolWrites: true
+        ) { config in
+            withUnsafePointer(to: &theme) { themePointer in
+                kero_alacritty_new_remote(
+                    config,
+                    themePointer,
+                    alacrittyEventCallback,
+                    UnsafeMutableRawPointer(bitPattern: UInt(token))
+                )
+            }
+        }
+        remoteConnection.onData = { [weak self] data, bootstrap in
+            guard let self, let handle = self.handle else { return }
+            if bootstrap { kero_alacritty_clear(handle) }
+            data.withUnsafeBytes { bytes in
+                kero_alacritty_feed(
+                    handle,
+                    bytes.bindMemory(to: UInt8.self).baseAddress,
+                    bytes.count
+                )
+            }
         }
     }
 
@@ -362,6 +423,9 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         isCommandPressed = false
         stopModifierMonitor()
         updateHoveredURL(nil)
+        remoteConnection?.close()
+        remoteConnection?.onData = nil
+        remoteConnection = nil
         guard let handle else { return }
         self.handle = nil
         kero_alacritty_free(handle)
@@ -433,7 +497,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         refreshFrozenFrame()
     }
 
-    var foregroundPid: pid_t? {
+    var foregroundProcessID: pid_t? {
         guard let handle else { return nil }
         let pid = kero_alacritty_foreground_pid(handle)
         return pid > 0 ? pid : nil
@@ -447,6 +511,12 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         progressBar.frame = CGRect(
             x: 0, y: bounds.height - height,
             width: bounds.width, height: height
+        )
+        remoteControlBanner.frame = CGRect(
+            x: max(8, (bounds.width - 310) / 2),
+            y: max(4, bounds.height - 38),
+            width: min(310, max(0, bounds.width - 16)),
+            height: 30
         )
     }
 
@@ -481,6 +551,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         guard let handle else { return }
         let size = gridSize(for: bounds.size)
         guard size != gridSize else { return }
+        if isRemotelyControlled { return }
         gridSize = size
         kero_alacritty_resize(
             handle,
@@ -910,6 +981,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             if let handle { kero_alacritty_mark_exited(handle) }
             events?.terminalDidClose(processAlive: false)
         case KERO_EVENT_CLIPBOARD_STORE:
+            guard !isRemoteRenderer else { return }
             // OSC 52 copy. Reads are refused in the bridge, so this is the
             // only clipboard traffic a program can generate.
             let text = String(decoding: payload, as: UTF8.self)
@@ -917,6 +989,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         case KERO_EVENT_CLIPBOARD_LOAD:
+            guard !isRemoteRenderer else { return }
             guard payload.count == MemoryLayout<UInt64>.size else { return }
             var requestID: UInt64 = 0
             _ = withUnsafeMutableBytes(of: &requestID) { bytes in
@@ -950,6 +1023,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             let percent = payload[2] == 0 ? nil : Int(payload[1])
             progressBar.applyReport(state: state, percent: percent)
         case KERO_EVENT_NOTIFICATION:
+            guard !isRemoteRenderer else { return }
             let message = String(decoding: payload, as: UTF8.self)
             guard !message.isEmpty else { return }
             events?.terminalDidRequestDesktopNotification(title: "", body: message)
@@ -983,6 +1057,22 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             if isPointerInside, hoveredURL == nil {
                 cursor.set()
             }
+        case KERO_EVENT_RAW_OUTPUT:
+            remoteOutput?(payload)
+        case KERO_EVENT_REMOTE_INPUT:
+            remoteConnection?.send(payload)
+        case KERO_EVENT_REMOTE_RESIZE:
+            guard payload.count == 8, let remoteConnection else { return }
+            let values = stride(from: 0, to: 8, by: 2).map { offset in
+                UInt16(payload[offset]) | UInt16(payload[offset + 1]) << 8
+            }
+            remoteConnection.resize(RemoteResize(
+                sessionID: remoteConnection.sessionID,
+                columns: values[0],
+                rows: values[1],
+                cellWidth: values[2],
+                cellHeight: values[3]
+            ))
         default:
             break
         }
@@ -1230,7 +1320,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     // MARK: - Input
 
     private func write(_ bytes: [UInt8]) {
-        guard let handle, !bytes.isEmpty else { return }
+        guard !isRemotelyControlled, let handle, !bytes.isEmpty else { return }
         bytes.withUnsafeBufferPointer { pointer in
             kero_alacritty_write(handle, pointer.baseAddress, pointer.count)
         }
@@ -1238,10 +1328,55 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     private func writeControl(_ bytes: [UInt8]) {
-        guard let handle, !bytes.isEmpty else { return }
+        guard !isRemotelyControlled, let handle, !bytes.isEmpty else { return }
         bytes.withUnsafeBufferPointer { pointer in
             kero_alacritty_write_control(handle, pointer.baseAddress, pointer.count)
         }
+    }
+
+    func beginRemoteControl(
+        resize: RemoteResize,
+        output: @escaping (Data) -> Void
+    ) {
+        isRemotelyControlled = true
+        addSubview(remoteControlBanner, positioned: .above, relativeTo: nil)
+        remoteControlBanner.activate()
+        remoteOutput = output
+        gridSize = (Int(resize.columns), Int(resize.rows))
+        guard let handle else { return }
+        kero_alacritty_set_protocol_writes(handle, false)
+        kero_alacritty_resize(
+            handle,
+            resize.columns,
+            resize.rows,
+            resize.cellWidth,
+            resize.cellHeight
+        )
+        scheduleRender(force: true)
+    }
+
+    func endRemoteControl() {
+        remoteOutput = nil
+        isRemotelyControlled = false
+        remoteControlBanner.deactivate()
+        if let handle { kero_alacritty_set_protocol_writes(handle, true) }
+        synchronizeGridSize()
+        scheduleRender(force: true)
+    }
+
+    func receiveRemoteInput(_ data: Data) {
+        guard isRemotelyControlled, let handle, !data.isEmpty else { return }
+        data.withUnsafeBytes { bytes in
+            kero_alacritty_write(
+                handle,
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                bytes.count
+            )
+        }
+    }
+
+    func remoteBootstrap() -> Data? {
+        TerminalHistorySerializer.rawCapture(from: self)
     }
 
     private var terminalMode: AlacrittyTerminalMode {
@@ -1381,6 +1516,11 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     override func mouseDown(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        if isRemotelyControlled, remoteControlBanner.frame.contains(localPoint) {
+            onTakeBackRemoteControl?()
+            return
+        }
         focusForInteraction()
         guard let handle else { return }
         if event.modifierFlags.contains(.command),
@@ -1404,6 +1544,14 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             handle, Int32(point.line), point.column, kind, point.rightHalf
         )
         scheduleRender(force: true)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = superview.map { convert(point, from: $0) } ?? point
+        if isRemotelyControlled, remoteControlBanner.frame.contains(localPoint) {
+            return remoteControlBanner
+        }
+        return super.hitTest(point)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -2074,6 +2222,7 @@ extension TerminalLaunch {
         scrollbackLines: Int,
         cursorShape: UInt8,
         cursorBlinking: Bool,
+        suppressProtocolWrites: Bool = false,
         _ body: (UnsafePointer<KeroConfig>) -> T
     ) -> T {
         let programCopy = strdup(program)
@@ -2105,7 +2254,8 @@ extension TerminalLaunch {
                     cell_height: cellHeight,
                     scrollback_lines: scrollbackLines,
                     cursor_shape: cursorShape,
-                    cursor_blinking: cursorBlinking
+                    cursor_blinking: cursorBlinking,
+                    suppress_protocol_writes: suppressProtocolWrites
                 )
                 return withUnsafePointer(to: &config) { body($0) }
             }

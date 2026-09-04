@@ -119,6 +119,18 @@ enum TerminalBackend: String, CaseIterable, Identifiable, Sendable {
             return AlacrittyTerminalView(launch: launch)
         }
     }
+
+    @MainActor
+    func makeRemoteSurface(
+        connection: RemoteTerminalConnection
+    ) -> any TerminalBackendSurface {
+        switch self {
+        case .libghostty:
+            KeroTerminalView(remoteConnection: connection)
+        case .alacritty:
+            AlacrittyTerminalView(remoteConnection: connection)
+        }
+    }
 }
 
 struct TerminalBackendHighlight: Identifiable, Sendable {
@@ -160,6 +172,9 @@ protocol TerminalBackendSurface: NSView {
     /// Fired whenever direct interaction makes this pane the active one.
     var onBecomeFirstResponder: (() -> Void)? { get set }
 
+    /// Host-side affordance that immediately revokes a remote controller.
+    var onTakeBackRemoteControl: (() -> Void)? { get set }
+
     /// Target for the pane-split items in the surface's context menu.
     var splitTarget: SplitMenuTarget { get }
 
@@ -168,7 +183,7 @@ protocol TerminalBackendSurface: NSView {
     var hasEffectiveTerminalFocus: Bool { get }
 
     /// PID of the surface's foreground process group leader, when known.
-    var foregroundPid: pid_t? { get }
+    var foregroundProcessID: pid_t? { get }
 
     /// Whether anything is selected in the grid.
     var hasSelection: Bool { get }
@@ -239,6 +254,20 @@ protocol TerminalBackendSurface: NSView {
     /// viewport alone. Nil when there is none — which is also how Kero tells a
     /// scrolled shell from a full-screen TUI.
     func exportScrollbackFile() -> String?
+
+    /// Makes the remote controller the only input and resize authority while
+    /// continuing to render locally. Output is delivered exactly as read from
+    /// the PTY, before UTF-8 decoding or terminal protocol parsing.
+    func beginRemoteControl(resize: RemoteResize, output: @escaping (Data) -> Void)
+
+    /// Restores local keyboard and resize ownership.
+    func endRemoteControl()
+
+    /// Input already encoded by the controller's terminal backend.
+    func receiveRemoteInput(_ data: Data)
+
+    /// Styled VT snapshot used to seed a newly attached remote renderer.
+    func remoteBootstrap() -> Data?
 }
 
 /// What a terminal surface reports back to the session that owns it. Each

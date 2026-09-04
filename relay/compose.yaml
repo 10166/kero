@@ -1,0 +1,17 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      KERO_RELAY_BASE_URL: ${KERO_RELAY_BASE_URL}
+      KERO_GOOGLE_CLIENT_ID: ${KERO_GOOGLE_CLIENT_ID}
+      KERO_GOOGLE_CLIENT_SECRET: ${KERO_GOOGLE_CLIENT_SECRET}
+      KERO_TOKEN_SECRET: ${KERO_TOKEN_SECRET}
+      KERO_DATABASE_PATH: /data/kero-relay.db
+    volumes:
+      - kero-relay-data:/data
+
+volumes:
+  kero-relay-data:

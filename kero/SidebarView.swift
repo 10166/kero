@@ -13,6 +13,7 @@ struct SidebarView: View {
     let bottomBarHeight: CGFloat
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
+    @ObservedObject private var remoteControl = RemoteControlService.shared
     @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("leftSidebarWidth") private var width: Double = 220
@@ -42,6 +43,12 @@ struct SidebarView: View {
 
             ScrollView {
                 VStack(spacing: 3) {
+                    if !remoteControl.hosts.isEmpty {
+                        RemoteHostsOutlineRepresentable(manager: manager)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Divider()
+                            .padding(.vertical, 4)
+                    }
                     ForEach(Array(manager.projects.enumerated()), id: \.element.id) { index, project in
                         SidebarProjectRow(
                             project: project,

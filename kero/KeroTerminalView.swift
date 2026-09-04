@@ -20,10 +20,17 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
 
     /// Fired whenever direct interaction makes this pane the active one.
     var onBecomeFirstResponder: (() -> Void)?
+    var onTakeBackRemoteControl: (() -> Void)?
     let splitTarget = SplitMenuTarget()
 
     /// Held strongly for the surface's lifetime; ``detach()`` drops it.
     var ghosttyController: TerminalController?
+    var inMemorySession: InMemoryTerminalSession?
+    var ptyAdapter: AlacrittyPTYAdapter?
+    var isRemotelyControlled = false
+    var remoteOutput: ((Data) -> Void)?
+    var remoteConnection: RemoteTerminalConnection?
+    var isRemoteRenderer = false
     /// The `/bin/sh -c …` line this surface launched, kept so a live
     /// re-configure can restate it rather than start a second shell.
     var launchCommand = ""
@@ -34,6 +41,7 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     var hoveredLink: String?
 
     private let progressBar = KeroTerminalProgressBarView(frame: .zero)
+    let remoteControlBanner = RemoteControlBannerView(frame: .zero)
     private var isCapturingHistoryExport = false
     private var capturedHistoryExportPath: String?
     private var isSurfaceVisible = false
@@ -41,6 +49,7 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     override init(frame: CGRect) {
         super.init(frame: frame)
         installProgressBar()
+        installRemoteControlBanner()
         registerForDraggedTypes([.fileURL])
     }
 
@@ -50,6 +59,11 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     convenience init(launch: TerminalLaunch) {
         self.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         start(launch: launch)
+    }
+
+    convenience init(remoteConnection: RemoteTerminalConnection) {
+        self.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        start(remoteConnection: remoteConnection)
     }
 
     // MARK: - TerminalBackendSurface
@@ -120,11 +134,25 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
             x: 0, y: bounds.height - height,
             width: bounds.width, height: height
         )
+        remoteControlBanner.frame = CGRect(
+            x: max(8, (bounds.width - 310) / 2),
+            y: max(4, bounds.height - 38),
+            width: min(310, max(0, bounds.width - 16)),
+            height: 30
+        )
     }
 
     private func installProgressBar() {
         progressBar.isHidden = true
         addSubview(progressBar)
+    }
+
+    private func installRemoteControlBanner() {
+        remoteControlBanner.isHidden = true
+        remoteControlBanner.onTakeBack = { [weak self] in
+            self?.onTakeBackRemoteControl?()
+        }
+        addSubview(remoteControlBanner)
     }
 
     /// Mirrors Kero's OSC 9;4 indicator: a two-point bar
@@ -254,8 +282,21 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if isRemotelyControlled, remoteControlBanner.frame.contains(point) {
+            onTakeBackRemoteControl?()
+            return
+        }
         focusForInteraction()
         super.mouseDown(with: event)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = superview.map { convert(point, from: $0) } ?? point
+        if isRemotelyControlled, remoteControlBanner.frame.contains(localPoint) {
+            return remoteControlBanner
+        }
+        return super.hitTest(point)
     }
 
     private func focusForInteraction() {

@@ -37,6 +37,10 @@ extern "C" {
 #define KERO_EVENT_SHELL_COMMAND_FINISHED 12u
 /// UTF-8 OSC 22 pointer-shape name — a CSS cursor keyword such as "pointer".
 #define KERO_EVENT_MOUSE_SHAPE 13u
+/// Raw PTY bytes, emitted before any interception or parser processing.
+#define KERO_EVENT_RAW_OUTPUT 14u
+#define KERO_EVENT_REMOTE_INPUT 15u
+#define KERO_EVENT_REMOTE_RESIZE 16u
 
 /// Per-cell attributes in `KeroCell.flags`.
 #define KERO_CELL_INVERSE (1u << 0)
@@ -164,12 +168,20 @@ typedef struct {
   /// 0 block, 1 underline, 2 beam.
   uint8_t cursor_shape;
   bool cursor_blinking;
+  /// Suppress parser-generated PTY replies for host-managed rendering peers.
+  bool suppress_protocol_writes;
 } KeroConfig;
 
 /// Spawns a shell on a new PTY and starts reading it. Returns NULL on failure.
 /// `context` must outlive the handle.
 KeroTerminal *kero_alacritty_new(const KeroConfig *config, const KeroTheme *theme,
                                  KeroEventCallback callback, void *context);
+
+/// Creates an emulator-only surface for a remotely owned PTY.
+KeroTerminal *kero_alacritty_new_remote(const KeroConfig *config, const KeroTheme *theme,
+                                        KeroEventCallback callback, void *context);
+void kero_alacritty_feed(KeroTerminal *handle, const uint8_t *bytes, size_t len);
+void kero_alacritty_set_protocol_writes(KeroTerminal *handle, bool enabled);
 
 /// Stops the read loop and releases the handle.
 void kero_alacritty_free(KeroTerminal *handle);

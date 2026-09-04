@@ -35,6 +35,21 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 
+	<!-- ASWebAuthenticationSession returns the self-hosted relay's one-time
+	     OAuth grant through this private callback scheme. PKCE binds it to the
+	     Kero process that initiated the login. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>sh.kero.remote-auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kero</string>
+			</array>
+		</dict>
+	</array>
+
 	<!-- Finder exposes this app service in a folder's context menu. AppKit
 	     forwards the selected paths to KeroApplicationDelegate.openInKero. -->
 	<key>NSServices</key>

@@ -11,6 +11,8 @@ A native terminal workspace for macOS.
 - Integrated browser tabs and panes
 - File tree, Git status, and editable diffs
 - Command palette, project-wide file search, and local path links
+- End-to-end encrypted terminal control between Kero Macs through a
+  [self-hosted relay](relay/README.md)
 - AI agents can delegate background work and coordinate across Kero panes, with provider-reported status and human-controlled approvals
 
 ## Download

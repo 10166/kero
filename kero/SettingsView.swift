@@ -230,6 +230,11 @@ struct SettingsView: View {
                 .frame(minHeight: 44)
             }
 
+            Section("Remote Control") {
+                RemoteSettingsRepresentable()
+                    .frame(height: 130)
+            }
+
             Section("Updates") {
                 Toggle(
                     "Automatically check for updates",
@@ -262,6 +267,8 @@ struct SettingsView: View {
                         && settings.toolbarVisibility == AppSettings.defaultToolbarVisibility
                         && !settings.wrapLines
                         && !settings.restoreTerminalHistory
+                        && settings.remoteRelayURL.isEmpty
+                        && !settings.remoteHostEnabled
                         && !settings.aiEnabled
                         && settings.terminalBackend == .fallback)
                 }

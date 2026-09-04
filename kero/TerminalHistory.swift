@@ -35,6 +35,16 @@ enum TerminalHistorySerializer {
         return .captured(normalizedHistory(from: capturedVT, maxLines: maxLines))
     }
 
+    /// Raw VT bootstrap for a remote renderer. Unlike persisted history this
+    /// deliberately performs no UTF-8 conversion or OSC rewriting.
+    @MainActor
+    static func rawCapture(from surface: any TerminalBackendSurface) -> Data? {
+        guard let captureFile = validatedCaptureFile(for: surface.exportScreenFile())
+        else { return nil }
+        defer { removeCaptureFile(captureFile) }
+        return try? Data(contentsOf: captureFile.fileURL, options: .mappedIfSafe)
+    }
+
     /// Plain visible rows for the Ctrl-Tab thumbnail. This uses the backend's
     /// screen export instead of AppKit bitmap caching because a framebuffer-
     /// only Metal layer cannot be captured reliably. Only the tail of a large
@@ -114,19 +124,19 @@ enum TerminalHistorySerializer {
     }
 
     /// Label shown in the restored-history divider.
-    private static let restoredBannerSourceLabel = "Session Contents Restored"
+    private nonisolated static let restoredBannerSourceLabel = "Session Contents Restored"
     static let restoredBannerLabel = String(
         localized: "Session Contents Restored",
         comment: "Divider between restored terminal scrollback and a new live shell."
     )
 
     /// The rule that brackets the label on each side of the divider.
-    private static let restoredBannerRule = String(repeating: "\u{2500}", count: 4)
+    private nonisolated static let restoredBannerRule = String(repeating: "\u{2500}", count: 4)
 
     /// The divider's plain, unstyled text — `<rule> <label> <rule>`. `visibleText`
     /// yields exactly this for a divider row, so recognizing one is an equality
     /// check against it.
-    private static func restoredBannerText(label: String) -> String {
+    private nonisolated static func restoredBannerText(label: String) -> String {
         "\(restoredBannerRule) \(label) \(restoredBannerRule)"
     }
 

@@ -46,6 +46,9 @@ final class TerminalManager: nonisolated ObservableObject {
                 retainedDiffProjectIDs.insert(selectedProjectID)
             }
         }
+        didSet {
+            if selectedProjectID != nil { selectedRemoteProject = nil }
+        }
     }
     @Published var isPanelVisible = false
     @Published var panelTab: RightPanel = .files
@@ -56,6 +59,7 @@ final class TerminalManager: nonisolated ObservableObject {
     /// every launch starts with it hidden.
     @Published var isFPSCounterVisible = false
     @Published private(set) var isCommandPaletteVisible = false
+    @Published var selectedRemoteProject: RemoteProjectSelection?
 
     /// Projects publish their own changes (session list, session selection);
     /// re-publish them so views observing the manager stay current.
@@ -67,6 +71,7 @@ final class TerminalManager: nonisolated ObservableObject {
     private var projectCounter = 0
     private var settingsObservation: AnyCancellable?
     private var autosaveObservation: AnyCancellable?
+    private var remoteTopologyObservation: AnyCancellable?
     private var terminationObservation: AnyCancellable?
     /// The stable terminal/editor responder displaced by the command palette's
     /// search field. AppKit field editors are deliberately excluded because a
@@ -175,6 +180,11 @@ final class TerminalManager: nonisolated ObservableObject {
             .sink { _ in
                 TerminalManager.saveAll(captureTerminalHistory: false)
             }
+        remoteTopologyObservation = objectWillChange
+            .debounce(for: .milliseconds(120), scheduler: DispatchQueue.main)
+            .sink { _ in
+                RemoteControlService.shared.topologyDidChange()
+            }
         // The debounce can swallow changes made just before quitting;
         // capture a final snapshot while the shells are still alive.
         terminationObservation = NotificationCenter.default
@@ -184,10 +194,38 @@ final class TerminalManager: nonisolated ObservableObject {
                 TerminalManager.isQuitting = true
                 TerminalManager.saveAll(captureTerminalHistory: true)
             }
+        RemoteControlService.shared.topologyDidChange()
     }
 
     var selectedProject: Project? {
         projects.first { $0.id == selectedProjectID }
+    }
+
+    var selectedRemoteProjectDescriptor: RemoteProjectDescriptor? {
+        guard let selection = selectedRemoteProject else { return nil }
+        return RemoteControlService.shared.hosts
+            .first { $0.id == selection.hostID }?
+            .topology?.projects.first { $0.id == selection.projectID }
+    }
+
+    func selectRemoteProject(hostID: UUID, projectID: UUID) {
+        let selectedTabID = RemoteControlService.shared.hosts
+            .first { $0.id == hostID }?
+            .topology?.projects.first { $0.id == projectID }?
+            .selectedTabID
+        selectedProjectID = nil
+        selectedRemoteProject = RemoteProjectSelection(
+            hostID: hostID,
+            projectID: projectID,
+            selectedTabID: selectedTabID
+        )
+        isPanelVisible = false
+    }
+
+    func selectRemoteTab(_ tabID: UUID) {
+        guard var selection = selectedRemoteProject else { return }
+        selection.selectedTabID = tabID
+        selectedRemoteProject = selection
     }
 
     var selectedSession: TerminalSession? {

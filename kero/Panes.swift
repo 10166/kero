@@ -98,7 +98,7 @@ enum PaneDropEdge {
 }
 
 /// The direction in which a split lays out its two children.
-enum PaneSplitAxis: String, Codable {
+enum PaneSplitAxis: String, Codable, Sendable {
     case horizontal
     case vertical
 }

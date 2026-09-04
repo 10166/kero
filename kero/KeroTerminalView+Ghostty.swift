@@ -19,6 +19,20 @@ extension KeroTerminalView {
 
     func start(launch: TerminalLaunch) {
         launchCommand = launch.commandLine
+        guard let ptyAdapter = AlacrittyPTYAdapter(launch: launch) else {
+            NSLog("kero: failed to start host-managed Ghostty PTY")
+            return
+        }
+        self.ptyAdapter = ptyAdapter
+        let session = InMemoryTerminalSession(
+            write: { [weak ptyAdapter] data in
+                ptyAdapter?.writeFromSurface(data)
+            },
+            resize: { [weak ptyAdapter] viewport in
+                ptyAdapter?.resizeFromSurface(viewport)
+            }
+        )
+        inMemorySession = session
         let controller = TerminalController(
             configSource: .none,
             theme: Self.ghosttyTheme(),
@@ -27,12 +41,62 @@ extension KeroTerminalView {
         ghosttyController = controller
         delegate = self
         configuration = TerminalSurfaceOptions(
-            backend: .exec,
+            backend: .inMemory(session),
             workingDirectory: launch.workingDirectory,
             envVars: launch.environment
         )
         self.controller = controller
         applyAppearance()
+        ptyAdapter.setHandlers(
+            output: { [weak self, weak session] data, forwardRemotely in
+                session?.receive(data)
+                if forwardRemotely {
+                    DispatchQueue.main.async { self?.remoteOutput?(data) }
+                }
+            },
+            exit: { [weak session] in
+                session?.finish(exitCode: 0, runtimeMilliseconds: 0)
+            }
+        )
+    }
+
+    func start(remoteConnection: RemoteTerminalConnection) {
+        isRemoteRenderer = true
+        self.remoteConnection = remoteConnection
+        let session = InMemoryTerminalSession(
+            write: { [weak remoteConnection] data in
+                Task { @MainActor [weak remoteConnection] in
+                    remoteConnection?.send(data)
+                }
+            },
+            resize: { [weak remoteConnection] viewport in
+                Task { @MainActor [weak remoteConnection] in
+                    guard let remoteConnection else { return }
+                    remoteConnection.resize(RemoteResize(
+                        sessionID: remoteConnection.sessionID,
+                        columns: viewport.columns,
+                        rows: viewport.rows,
+                        cellWidth: UInt16(clamping: viewport.cellWidthPixels),
+                        cellHeight: UInt16(clamping: viewport.cellHeightPixels)
+                    ))
+                }
+            }
+        )
+        inMemorySession = session
+        let controller = TerminalController(
+            configSource: .none,
+            theme: Self.ghosttyTheme(),
+            terminalConfiguration: Self.terminalConfiguration(command: "", remote: true)
+        )
+        ghosttyController = controller
+        delegate = self
+        configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+        self.controller = controller
+        applyAppearance()
+        remoteConnection.onData = { [weak session] data, bootstrap in
+            if bootstrap { session?.receive(Data("\u{1b}c".utf8)) }
+            session?.receive(data)
+        }
     }
 
     /// Reconfigures libghostty in place when appearance, font, or terminal
@@ -41,7 +105,7 @@ extension KeroTerminalView {
     func applyAppearance() {
         guard let ghosttyController else { return }
         _ = ghosttyController.setTerminalConfiguration(
-            Self.terminalConfiguration(command: launchCommand)
+            Self.terminalConfiguration(command: launchCommand, remote: isRemoteRenderer)
         )
         _ = ghosttyController.setTheme(Self.ghosttyTheme())
         let isDark = NSApp.effectiveAppearance.bestMatch(
@@ -53,13 +117,50 @@ extension KeroTerminalView {
     /// Releases the surface. The view itself stays in the layout so teardown
     /// never pulls a pane out from under SwiftUI mid-frame.
     func detach() {
+        remoteConnection?.close()
+        remoteConnection?.onData = nil
+        remoteConnection = nil
         controller = nil
         ghosttyController = nil
+        inMemorySession = nil
+        ptyAdapter?.detach()
+        ptyAdapter = nil
+    }
+
+    var foregroundProcessID: pid_t? { ptyAdapter?.foregroundPid }
+
+    func beginRemoteControl(
+        resize: RemoteResize,
+        output: @escaping (Data) -> Void
+    ) {
+        isRemotelyControlled = true
+        addSubview(remoteControlBanner, positioned: .above, relativeTo: nil)
+        remoteControlBanner.activate()
+        remoteOutput = output
+        ptyAdapter?.beginRemoteControl(resize)
+    }
+
+    func endRemoteControl() {
+        remoteOutput = nil
+        isRemotelyControlled = false
+        remoteControlBanner.deactivate()
+        ptyAdapter?.endRemoteControl()
+    }
+
+    func receiveRemoteInput(_ data: Data) {
+        ptyAdapter?.writeFromRemote(data)
+    }
+
+    func remoteBootstrap() -> Data? {
+        TerminalHistorySerializer.rawCapture(from: self)
     }
 
     // MARK: - Configuration
 
-    private static func terminalConfiguration(command: String) -> TerminalConfiguration {
+    private static func terminalConfiguration(
+        command: String,
+        remote: Bool = false
+    ) -> TerminalConfiguration {
         let settings = AppSettings.shared
         let family = settings.fontFamily.isEmpty
             ? TerminalFont.bundledFamily : settings.fontFamily
@@ -112,7 +213,9 @@ extension KeroTerminalView {
             ] {
                 builder.withCustom("keybind", keybind)
             }
-            builder.withCustom("command", "shell:\(command)")
+            if !command.isEmpty {
+                builder.withCustom("command", "shell:\(command)")
+            }
             builder.withCustom("term", "xterm-256color")
             builder.withCustom("shell-integration", "none")
             // The previous backend retained 500 rows. Ghostty budgets bytes
@@ -140,9 +243,9 @@ extension KeroTerminalView {
             // wrapper's base config can never drift them. Cmd-C/Cmd-V are
             // host-initiated and stay prompt-free (unless an unsafe paste
             // trips protection).
-            builder.withCustom("clipboard-read", "ask")
-            builder.withCustom("clipboard-write", "allow")
-            builder.withCustom("clipboard-paste-protection", "true")
+            builder.withCustom("clipboard-read", remote ? "deny" : "ask")
+            builder.withCustom("clipboard-write", remote ? "deny" : "allow")
+            builder.withCustom("clipboard-paste-protection", remote ? "false" : "true")
         }
     }
 
@@ -183,6 +286,7 @@ extension KeroTerminalView: TerminalSurfaceGridResizeDelegate {
 
 extension KeroTerminalView: TerminalSurfaceBellDelegate {
     func terminalDidRingBell() {
+        guard !isRemoteRenderer else { return }
         events?.terminalDidRingBell()
     }
 }
@@ -195,6 +299,7 @@ extension KeroTerminalView: TerminalSurfaceCloseDelegate {
 
 extension KeroTerminalView: TerminalSurfaceDesktopNotificationDelegate {
     func terminalDidRequestDesktopNotification(title: String, body: String) {
+        guard !isRemoteRenderer else { return }
         events?.terminalDidRequestDesktopNotification(title: title, body: body)
     }
 }
@@ -217,6 +322,7 @@ extension KeroTerminalView: TerminalSurfaceCommandFinishedDelegate {
 
 extension KeroTerminalView: TerminalSurfaceOpenURLDelegate {
     func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
+        guard !isRemoteRenderer else { return }
         // A history export borrows this callback as its synchronous return
         // channel for a file path; that one is not a URL to open.
         if consumeHistoryExportURL(url, kind: kind) { return }
@@ -264,6 +370,10 @@ extension KeroTerminalView: TerminalSurfaceClipboardConfirmationDelegate {
     func terminalDidRequestClipboardConfirmation(
         _ request: TerminalClipboardConfirmationRequest
     ) {
+        guard !isRemoteRenderer else {
+            request.deny()
+            return
+        }
         let kind: TerminalClipboardRequest.Kind
         switch request.kind {
         case .unsafePaste: kind = .unsafePaste

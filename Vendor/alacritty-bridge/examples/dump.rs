@@ -63,6 +63,7 @@ fn main() {
         scrollback_lines: 1000,
         cursor_shape: 0,
         cursor_blinking: true,
+        suppress_protocol_writes: false,
     };
 
     let mut theme = KeroTheme {

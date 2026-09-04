@@ -17,6 +17,7 @@ struct keroApp: App {
         TerminalFont.registerBundledFonts()
         TerminalNotificationService.shared.configure()
         AppSettings.shared.reconcileAIEnabled()
+        RemoteControlService.shared.start()
     }
 
     var body: some Scene {

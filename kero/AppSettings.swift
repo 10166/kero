@@ -212,6 +212,24 @@ final class AppSettings: nonisolated ObservableObject {
         didSet { save() }
     }
 
+    /// Base URL of the user's self-hosted relay. Credentials and device keys
+    /// are deliberately kept in Keychain, never in this human-readable file.
+    @Published var remoteRelayURL: String {
+        didSet {
+            save()
+            RemoteControlService.shared.settingsDidChange()
+        }
+    }
+
+    /// Logging in discovers this Mac, but never silently exposes its
+    /// terminals. Hosting remains a separate per-device opt-in.
+    @Published var remoteHostEnabled: Bool {
+        didSet {
+            save()
+            RemoteControlService.shared.settingsDidChange()
+        }
+    }
+
     /// Link Kero's shared coordination skill plus the native lifecycle
     /// integrations whose provider APIs provide semantic turn events. Other
     /// agents retain process recognition without inferred progress state.
@@ -266,6 +284,8 @@ final class AppSettings: nonisolated ObservableObject {
         macosOptionAsAlt = toml["terminal.macos-option-as-alt"]?.bool ?? false
         wrapLines = toml["editor.wrap-lines"]?.bool ?? false
         restoreTerminalHistory = toml["terminal.restore-history"]?.bool ?? false
+        remoteRelayURL = toml["remote.relay-url"]?.string ?? ""
+        remoteHostEnabled = toml["remote.host-enabled"]?.bool ?? false
         aiEnabled = toml["ai.enabled"]?.bool ?? false
         terminalBackend = TerminalBackend(persisted: toml["terminal.backend"]?.string)
         applyAppearance()
@@ -317,6 +337,9 @@ final class AppSettings: nonisolated ObservableObject {
         macosOptionAsAlt = false
         wrapLines = false
         restoreTerminalHistory = false
+        RemoteControlService.shared.signOut()
+        remoteRelayURL = ""
+        remoteHostEnabled = false
         if aiEnabled {
             do {
                 try setAIEnabled(false)
@@ -404,6 +427,12 @@ final class AppSettings: nonisolated ObservableObject {
         }
         if restoreTerminalHistory {
             lines.append("terminal.restore-history = true")
+        }
+        if !remoteRelayURL.isEmpty {
+            lines.append("remote.relay-url = \(TOML.quote(remoteRelayURL))")
+        }
+        if remoteHostEnabled {
+            lines.append("remote.host-enabled = true")
         }
         if aiEnabled {
             lines.append("ai.enabled = true")
