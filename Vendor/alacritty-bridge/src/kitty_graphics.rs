@@ -35,6 +35,36 @@ pub(crate) struct KittyGraphicsCommand {
 }
 
 impl KittyGraphicsCommand {
+    /// Remote streams may carry pixels, never paths in the renderer's
+    /// filesystem. Reject unknown/malformed media too, rather than relying
+    /// on another emulator's interpretation of them.
+    pub(crate) fn is_inline(&self) -> bool {
+        !self.oversized
+            && self.control.iter().all(|(key, value)| {
+                key.is_ascii_alphabetic()
+                    && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"+-".contains(&byte))
+                    && (*key != 't' || value == "d")
+            })
+            // Never re-emit embedded control sequences for another emulator
+            // to reinterpret as a new command outside our validation.
+            && self.payload.iter().all(|byte| byte.is_ascii_alphanumeric() || b"+/=".contains(byte))
+    }
+
+    pub(crate) fn encode(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(b"\x1b_G");
+        for (index, (key, value)) in self.control.iter().enumerate() {
+            if index != 0 {
+                output.push(b',');
+            }
+            output.push(*key as u8);
+            output.push(b'=');
+            output.extend_from_slice(value.as_bytes());
+        }
+        output.push(b';');
+        output.extend_from_slice(&self.payload);
+        output.extend_from_slice(b"\x1b\\");
+    }
+
     fn parse(bytes: Vec<u8>, oversized: bool) -> Self {
         let separator = bytes.iter().position(|byte| *byte == b';');
         let (control, payload) = match separator {
@@ -105,9 +135,17 @@ pub(crate) struct KittyGraphicsInterceptor {
     command: Vec<u8>,
     oversized: bool,
     utf8_continuations: u8,
+    drop_other_apc: bool,
 }
 
 impl KittyGraphicsInterceptor {
+    pub(crate) fn remote_filter() -> Self {
+        Self {
+            drop_other_apc: true,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn process(&mut self, bytes: &[u8]) -> Vec<KittyGraphicsItem> {
         let mut items = Vec::new();
         let mut text = Vec::with_capacity(bytes.len());
@@ -157,17 +195,21 @@ impl KittyGraphicsInterceptor {
                         self.oversized = false;
                         self.state = InterceptorState::Kitty;
                     } else {
-                        if c1 {
-                            text.push(0x9f);
-                        } else {
-                            text.extend_from_slice(b"\x1b_");
+                        if !self.drop_other_apc {
+                            if c1 {
+                                text.push(0x9f);
+                            } else {
+                                text.extend_from_slice(b"\x1b_");
+                            }
+                            text.push(byte);
                         }
-                        text.push(byte);
                         self.state = InterceptorState::OtherApc;
                     }
                 }
                 InterceptorState::OtherApc => {
-                    text.push(byte);
+                    if !self.drop_other_apc {
+                        text.push(byte);
+                    }
                     if byte == 0x9c {
                         self.state = InterceptorState::Ground;
                     } else if byte == 0x1b {
@@ -175,7 +217,9 @@ impl KittyGraphicsInterceptor {
                     }
                 }
                 InterceptorState::OtherApcEscape => {
-                    text.push(byte);
+                    if !self.drop_other_apc {
+                        text.push(byte);
+                    }
                     if byte == b'\\' || byte == 0x9c {
                         self.state = InterceptorState::Ground;
                     } else if byte != 0x1b {
@@ -319,6 +363,7 @@ pub(crate) struct KittyGraphicsApplyResult {
 
 #[derive(Default)]
 pub(crate) struct KittyGraphicsState {
+    deny_file_transfers: bool,
     images: HashMap<u32, StoredImage>,
     placements: Vec<Placement>,
     insertion_order: VecDeque<u32>,
@@ -336,6 +381,16 @@ pub(crate) struct KittyGraphicsStore {
 }
 
 impl KittyGraphicsStore {
+    pub(crate) fn remote() -> Self {
+        Self {
+            state: KittyGraphicsState {
+                deny_file_transfers: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn mark_changed(&mut self) {
         self.revision = self.revision.wrapping_add(1).max(1);
     }
@@ -866,6 +921,11 @@ impl KittyGraphicsState {
         command: &KittyGraphicsCommand,
         decoded: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
+        // Check the assembled upload as well as individual frames: chunked
+        // uploads inherit their transmission medium from the first command.
+        if self.deny_file_transfers && !command.is_inline() {
+            return Err("ENOTSUP:remote images must use direct transmission".into());
+        }
         match command.char_value('t').unwrap_or('d') {
             'd' => Ok(decoded),
             'f' | 't' => {

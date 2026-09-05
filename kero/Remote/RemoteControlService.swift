@@ -102,13 +102,14 @@ final class RemoteControlService: ObservableObject {
     }
 
     func revoke(_ device: RemoteDeviceRecord) async {
-        guard let api, let token = await validAccessToken() else { return }
         do {
+            guard let api else { return }
+            let token = try await validAccessToken()
             try await api.revoke(deviceID: device.id, accessToken: token)
             if device.id == identity?.id { signOut() }
             else { try await refreshDevices() }
         } catch {
-            state = .failed(error.localizedDescription)
+            if tokens != nil { state = .failed(error.localizedDescription) }
         }
     }
 
@@ -247,9 +248,10 @@ final class RemoteControlService: ObservableObject {
     }
 
     private func connect() async throws {
-        guard let identity, let api, let accessToken = await validAccessToken() else {
+        guard let identity, let api else {
             throw RemoteServiceError.signedOut
         }
+        let accessToken = try await validAccessToken()
         state = .connecting
         try await api.register(identity: identity, accessToken: accessToken)
         try await refreshDevices()
@@ -265,10 +267,10 @@ final class RemoteControlService: ObservableObject {
         }
     }
 
-    private func validAccessToken() async -> String? {
-        guard var current = tokens else { return nil }
+    private func validAccessToken() async throws -> String {
+        guard var current = tokens else { throw RemoteServiceError.signedOut }
         if current.expiresAt.timeIntervalSinceNow < 60 {
-            guard let api else { return nil }
+            guard let api else { throw RemoteServiceError.signedOut }
             do {
                 current = try await api.refresh(current.refreshToken)
                 tokens = current
@@ -276,17 +278,20 @@ final class RemoteControlService: ObservableObject {
                     try persist(tokens: current, relayURL: relayURL)
                 }
             } catch {
-                signOut()
-                return nil
+                // A timeout or relay outage says nothing about whether the
+                // refresh token is valid. Preserve it for the reconnect loop.
+                if RemoteAPIError.invalidatesRefreshToken(error) { signOut() }
+                throw error
             }
         }
         return current.accessToken
     }
 
     private func refreshDevices() async throws {
-        guard let api, let accessToken = await validAccessToken() else {
+        guard let api else {
             throw RemoteServiceError.signedOut
         }
+        let accessToken = try await validAccessToken()
         devices = try await api.devices(accessToken: accessToken)
         rebuildHosts()
     }
@@ -298,7 +303,7 @@ final class RemoteControlService: ObservableObject {
                 case .string(let string):
                     await receivePresence(string)
                 case .data(let data):
-                    receiveEncrypted(data)
+                    await receiveEncrypted(data)
                 @unknown default:
                     break
                 }
@@ -348,7 +353,7 @@ final class RemoteControlService: ObservableObject {
         topologyDidChange()
     }
 
-    private func receiveEncrypted(_ data: Data) {
+    private func receiveEncrypted(_ data: Data) async {
         guard let identity,
               data.count >= RemoteFrame.headerLength,
               let senderID = try? UUID(remoteBytes: data[18..<34]),
@@ -390,7 +395,7 @@ final class RemoteControlService: ObservableObject {
                 rebuildHosts()
             }
         case .attach:
-            receiveAttach(plaintext, frame: frame, sender: sender)
+            await receiveAttach(plaintext, frame: frame, sender: sender)
         case .granted:
             guard let response = try? JSONDecoder().decode(RemoteAttachResponse.self, from: plaintext),
                   let connection = remoteConnections[
@@ -443,7 +448,7 @@ final class RemoteControlService: ObservableObject {
         _ data: Data,
         frame: RemoteFrame,
         sender: RemoteDeviceRecord
-    ) {
+    ) async {
         guard AppSettings.shared.remoteHostEnabled,
               let request = try? JSONDecoder().decode(RemoteAttachRequest.self, from: data),
               request.requestID == frame.streamID,
@@ -489,6 +494,18 @@ final class RemoteControlService: ObservableObject {
             ),
             output: control.output
         )
+        let bootstrap = await session.remoteBootstrap()
+        guard hostControls[session.id] === control else { return }
+        guard let bootstrap else {
+            hostControls[session.id] = nil
+            control.release()
+            sendAttachResponse(
+                kind: .busy, sessionID: session.id,
+                reason: String(localized: "Terminal is unavailable."),
+                to: sender, streamID: frame.streamID
+            )
+            return
+        }
         sendAttachResponse(
             kind: .granted,
             sessionID: session.id,
@@ -496,7 +513,7 @@ final class RemoteControlService: ObservableObject {
             to: sender,
             streamID: frame.streamID
         )
-        send(session.remoteBootstrap() ?? Data(), kind: .bootstrap, to: sender, streamID: frame.streamID)
+        send(bootstrap, kind: .bootstrap, to: sender, streamID: frame.streamID)
         control.activate()
     }
 

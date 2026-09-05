@@ -9,7 +9,9 @@ use crate::{
         KittyGraphicsInterceptor, KittyGraphicsItem, KittyGraphicsScreen, KittyGraphicsSize,
         KittyGraphicsStore,
     },
-    kitty_graphics_tracking::{advance_cursor, advance_text, KittyGraphicsCursorTracker},
+    kitty_graphics_tracking::{
+        advance_cursor, advance_text, finish_sync, KittyGraphicsCursorTracker,
+    },
 };
 use alacritty_terminal::{
     event::{Event, EventListener, Notify, OnResize, WindowSize},
@@ -39,11 +41,17 @@ const MAX_LOCKED_READ: usize = u16::MAX as usize;
 const PTY_READ_WRITE_TOKEN: usize = 0;
 const PTY_CHILD_EVENT_TOKEN: usize = 1;
 
-#[derive(Debug)]
 pub(crate) enum GraphicsMsg {
     Input(Cow<'static, [u8]>),
     Shutdown,
-    Resize(WindowSize),
+    Resize {
+        size: WindowSize,
+        reset_region: bool,
+    },
+    RemoteBootstrap {
+        theme: crate::KeroTheme,
+        reply: Box<dyn FnOnce(Vec<u8>) + Send>,
+    },
 }
 
 pub(crate) struct GraphicsEventLoop<T: tty::EventedPty, U: EventListener> {
@@ -100,11 +108,37 @@ where
         while let Some(message) = self.receiver.recv() {
             match message {
                 GraphicsMsg::Input(input) => state.write_list.push_back(input),
-                GraphicsMsg::Resize(size) => {
-                    state.graphics_cursor_tracker.reset_scroll_region();
+                GraphicsMsg::Resize { size, reset_region } => {
+                    if reset_region {
+                        state.graphics_cursor_tracker.reset_scroll_region();
+                    }
                     self.pty.on_resize(size);
                 }
                 GraphicsMsg::Shutdown => return false,
+                GraphicsMsg::RemoteBootstrap { theme, reply } => {
+                    // A PTY-thread barrier makes the snapshot and subsequent
+                    // output one continuous stream without duplicated bytes.
+                    let mut term = self.terminal.lock();
+                    // Raw output preceding this barrier includes buffered
+                    // synchronized updates, so commit them into the snapshot.
+                    if state.parser.sync_bytes_count() > 0 {
+                        let mut graphics = self.graphics.lock();
+                        let effects = finish_sync(
+                            &mut state.graphics_cursor_tracker,
+                            &mut state.parser,
+                            &mut term,
+                            graphics.state.has_placements(),
+                        );
+                        if effects.apply_to(&mut graphics.state) {
+                            graphics.mark_changed();
+                        }
+                    }
+                    reply(crate::serialize_remote_vt(
+                        &term,
+                        &theme,
+                        &state.graphics_cursor_tracker,
+                    ));
+                }
             }
         }
         true
@@ -446,7 +480,10 @@ impl Notify for GraphicsNotifier {
 
 impl OnResize for GraphicsNotifier {
     fn on_resize(&mut self, size: WindowSize) {
-        let _ = self.0.send(GraphicsMsg::Resize(size));
+        let _ = self.0.send(GraphicsMsg::Resize {
+            size,
+            reset_region: true,
+        });
     }
 }
 

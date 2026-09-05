@@ -76,6 +76,8 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     private var remoteOutput: ((Data) -> Void)?
     private var remoteConnection: RemoteTerminalConnection?
     private var isRemoteRenderer = false
+    private var bootstrapRequest: CheckedContinuation<Data?, Never>?
+    private var bootstrapTimeout: Task<Void, Never>?
 
     private struct URLHit: Equatable {
         let value: String
@@ -415,6 +417,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     func detach() {
+        finishBootstrap(nil)
         directoryTimer?.invalidate()
         directoryTimer = nil
         cursorTimer?.invalidate()
@@ -1058,7 +1061,10 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
                 cursor.set()
             }
         case KERO_EVENT_RAW_OUTPUT:
-            remoteOutput?(payload)
+            // Bytes preceding the PTY snapshot are already represented in it.
+            if bootstrapRequest == nil { remoteOutput?(payload) }
+        case KERO_EVENT_REMOTE_BOOTSTRAP:
+            finishBootstrap(payload)
         case KERO_EVENT_REMOTE_INPUT:
             remoteConnection?.send(payload)
         case KERO_EVENT_REMOTE_RESIZE:
@@ -1356,6 +1362,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     func endRemoteControl() {
+        finishBootstrap(nil)
         remoteOutput = nil
         isRemotelyControlled = false
         remoteControlBanner.deactivate()
@@ -1375,8 +1382,28 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         }
     }
 
-    func remoteBootstrap() -> Data? {
-        TerminalHistorySerializer.rawCapture(from: self)
+    func remoteBootstrap() async -> Data? {
+        guard let handle, bootstrapRequest == nil else { return nil }
+        return await withCheckedContinuation { continuation in
+            bootstrapRequest = continuation
+            guard kero_alacritty_request_remote_bootstrap(handle) else {
+                finishBootstrap(nil)
+                return
+            }
+            bootstrapTimeout = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                self?.finishBootstrap(nil)
+            }
+        }
+    }
+
+    private func finishBootstrap(_ data: Data?) {
+        bootstrapTimeout?.cancel()
+        bootstrapTimeout = nil
+        let request = bootstrapRequest
+        bootstrapRequest = nil
+        request?.resume(returning: data)
     }
 
     private var terminalMode: AlacrittyTerminalMode {

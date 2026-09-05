@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS devices_account ON devices(account_id);
 CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account_id);
+-- Also invalidate sessions revoked by relays predating permanent revocation.
+DELETE FROM sessions WHERE EXISTS (
+  SELECT 1 FROM devices d WHERE d.account_id=sessions.account_id
+    AND d.id=sessions.device_id AND d.revoked_at IS NOT NULL
+);
 `)
 	return err
 }
@@ -114,8 +119,20 @@ func (s *Store) ConsumeLoginGrant(ctx context.Context, hash string) (accountID, 
 }
 
 func (s *Store) PutSession(ctx context.Context, token, accountID, deviceID, kind string, expiry time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions(token_hash,account_id,device_id,kind,expires_at) VALUES(?,?,?,?,?)`, HashToken(token), accountID, deviceID, kind, expiry.UTC().Format(time.RFC3339Nano))
-	return err
+	// A revoke can race token issuance after login or refresh has authenticated.
+	result, err := s.db.ExecContext(ctx, `INSERT INTO sessions(token_hash,account_id,device_id,kind,expires_at)
+SELECT ?,account_id,id,?,? FROM devices WHERE account_id=? AND id=? AND revoked_at IS NULL`, HashToken(token), kind, expiry.UTC().Format(time.RFC3339Nano), accountID, deviceID)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ConsumeRefresh(ctx context.Context, token string) (accountID, deviceID string, err error) {
@@ -208,6 +225,18 @@ func (s *Store) DeviceBelongsTo(ctx context.Context, accountID, id string) bool 
 }
 
 func (s *Store) RevokeDevice(ctx context.Context, accountID, id string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE devices SET revoked_at=? WHERE id=? AND account_id=?`, time.Now().UTC().Format(time.RFC3339Nano), id, accountID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE devices SET revoked_at=? WHERE id=? AND account_id=?`, time.Now().UTC().Format(time.RFC3339Nano), id, accountID); err != nil {
+		return err
+	}
+	// Enrollment can clear revoked_at for this stable device ID. Its old
+	// credentials must stay revoked even after the owner signs in again.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id=? AND device_id=?`, accountID, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

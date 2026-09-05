@@ -78,6 +78,7 @@ pub const KERO_EVENT_RAW_OUTPUT: u32 = 14;
 pub const KERO_EVENT_REMOTE_INPUT: u32 = 15;
 /// Four little-endian UInt16 values: columns, rows, cell width, cell height.
 pub const KERO_EVENT_REMOTE_RESIZE: u32 = 16;
+pub const KERO_EVENT_REMOTE_BOOTSTRAP: u32 = 17;
 
 /// Per-cell attributes handed to the renderer. A subset of
 /// `alacritty_terminal`'s `Flags` plus Kero's own `SELECTED`.
@@ -1020,6 +1021,59 @@ pub struct KeroTerminal {
     remote_parser: Option<RemoteParser>,
 }
 
+/// Streaming filter for the other remote renderer (Ghostty). Keep terminal
+/// text and inline images, but never pass a controller-local path to it.
+pub struct KeroRemoteOutputFilter {
+    interceptor: KittyGraphicsInterceptor,
+    output: Vec<u8>,
+}
+
+#[no_mangle]
+pub extern "C" fn kero_remote_output_filter_new() -> *mut KeroRemoteOutputFilter {
+    Box::into_raw(Box::new(KeroRemoteOutputFilter {
+        // Unknown APC payloads can contain escapes another parser treats as
+        // a new command. Drop them instead of passing unvalidated bytes on.
+        interceptor: KittyGraphicsInterceptor::remote_filter(),
+        output: Vec::new(),
+    }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn kero_remote_output_filter_free(filter: *mut KeroRemoteOutputFilter) {
+    if !filter.is_null() {
+        drop(Box::from_raw(filter));
+    }
+}
+
+/// The returned bytes remain valid until the next filter call or free.
+#[no_mangle]
+pub unsafe extern "C" fn kero_remote_output_filter_feed(
+    filter: *mut KeroRemoteOutputFilter,
+    bytes: *const u8,
+    len: usize,
+    output_len: *mut usize,
+) -> *const u8 {
+    if filter.is_null() || bytes.is_null() || output_len.is_null() {
+        return std::ptr::null();
+    }
+    let filter = &mut *filter;
+    filter.output.clear();
+    for item in filter
+        .interceptor
+        .process(std::slice::from_raw_parts(bytes, len))
+    {
+        match item {
+            KittyGraphicsItem::Text(text) => filter.output.extend_from_slice(&text),
+            KittyGraphicsItem::Command(command) if command.is_inline() => {
+                command.encode(&mut filter.output)
+            }
+            KittyGraphicsItem::Command(_) => {}
+        }
+    }
+    *output_len = filter.output.len();
+    filter.output.as_ptr()
+}
+
 #[derive(Default)]
 struct RemoteParser {
     parser: ansi::Processor,
@@ -1378,7 +1432,7 @@ pub unsafe extern "C" fn kero_alacritty_new_remote(
         &size,
         proxy.clone(),
     )));
-    let kitty_graphics = Arc::new(FairMutex::new(KittyGraphicsStore::default()));
+    let kitty_graphics = Arc::new(FairMutex::new(KittyGraphicsStore::remote()));
     let kitty_graphics_size = Arc::new(FairMutex::new(KittyGraphicsSize {
         columns,
         rows: screen_lines,
@@ -1634,11 +1688,17 @@ pub unsafe extern "C" fn kero_alacritty_resize(
         columns: columns.max(1) as usize,
         screen_lines: rows.max(1) as usize,
     };
-    terminal.term.lock().resize(size);
+    let mut term = terminal.term.lock();
+    let grid_changed = term.columns() != size.columns || term.screen_lines() != size.screen_lines;
+    term.resize(size);
+    drop(term);
     if let Some(notifier) = &mut terminal.notifier {
-        notifier.on_resize(window_size);
+        let _ = notifier.0.send(GraphicsMsg::Resize {
+            size: window_size,
+            reset_region: grid_changed,
+        });
     } else {
-        if let Some(parser) = terminal.remote_parser.as_mut() {
+        if let Some(parser) = terminal.remote_parser.as_mut().filter(|_| grid_changed) {
             parser.graphics_cursor_tracker.reset_scroll_region();
         }
         let mut payload = Vec::with_capacity(8);
@@ -2011,6 +2071,24 @@ fn push_hyperlink(output: &mut Vec<u8>, uri: Option<&str>) {
     output.extend_from_slice(b"\x1b\\");
 }
 
+fn push_cursor_style(output: &mut Vec<u8>, cell: &Cell, colors: &Colors, theme: &KeroTheme) {
+    push_sgr(output, &style_for(cell, colors, theme));
+    // Preserve default/palette references for future output and erased cells;
+    // baking them into RGB changes background erasure and later palette edits.
+    for (color, prefix, default) in [(cell.fg, 38, 39), (cell.bg, 48, 49)] {
+        let code = match color {
+            Color::Named(NamedColor::Foreground | NamedColor::Background) => default.to_string(),
+            Color::Named(name) if (name as usize) < 8 => format!("{}", prefix - 8 + name as usize),
+            Color::Named(name) if (name as usize) < 16 => {
+                format!("{}", prefix + 52 + name as usize - 8)
+            }
+            Color::Indexed(index) => format!("{prefix};5;{index}"),
+            _ => continue,
+        };
+        output.extend_from_slice(format!("\x1b[{code}m").as_bytes());
+    }
+}
+
 fn cell_has_visible_content(cell: &Cell) -> bool {
     cell.c != ' '
         || cell.zerowidth().is_some_and(|marks| !marks.is_empty())
@@ -2112,6 +2190,137 @@ fn serialize_vt<T: EventListener>(
         output.extend_from_slice(b"\x1b[0m");
     }
     output
+}
+
+/// A live renderer needs input and cursor state, not just a transcript's
+/// appearance. Keep history export unchanged and serialize this at the PTY
+/// barrier so every subsequent byte is applied exactly once.
+fn serialize_remote_vt<T: EventListener>(
+    term: &Term<T>,
+    theme: &KeroTheme,
+    tracker: &KittyGraphicsCursorTracker,
+) -> Vec<u8> {
+    let mode = term.mode();
+    let mut output = b"\x1bc".to_vec();
+    if mode.contains(TermMode::ALT_SCREEN) {
+        output.extend_from_slice(b"\x1b[?1049h");
+    }
+    let mut screen = serialize_vt(term, theme, false);
+    // The transcript's final newline would scroll the live screen by a row.
+    if screen.ends_with(b"\r\n") {
+        screen.truncate(screen.len() - 2);
+    }
+    output.extend_from_slice(&screen);
+
+    let (top, bottom) = tracker.scroll_region(term.screen_lines());
+    output.extend_from_slice(format!("\x1b[{};{}r", top + 1, bottom).as_bytes());
+    for (flag, number) in [
+        (TermMode::APP_CURSOR, 1),
+        (TermMode::ORIGIN, 6),
+        (TermMode::LINE_WRAP, 7),
+        (TermMode::SHOW_CURSOR, 25),
+        (TermMode::MOUSE_REPORT_CLICK, 1000),
+        (TermMode::MOUSE_DRAG, 1002),
+        (TermMode::MOUSE_MOTION, 1003),
+        (TermMode::FOCUS_IN_OUT, 1004),
+        (TermMode::UTF8_MOUSE, 1005),
+        (TermMode::SGR_MOUSE, 1006),
+        (TermMode::ALTERNATE_SCROLL, 1007),
+        (TermMode::URGENCY_HINTS, 1042),
+        (TermMode::BRACKETED_PASTE, 2004),
+    ] {
+        output.extend_from_slice(
+            format!(
+                "\x1b[?{}{}",
+                number,
+                if mode.contains(flag) { 'h' } else { 'l' }
+            )
+            .as_bytes(),
+        );
+    }
+    output.extend_from_slice(if mode.contains(TermMode::APP_KEYPAD) {
+        b"\x1b="
+    } else {
+        b"\x1b>"
+    });
+
+    let restore_cursor = |output: &mut Vec<u8>, cursor: &alacritty_terminal::grid::Cursor<Cell>| {
+        let row = cursor.point.line.0.max(0) as usize;
+        let row = if mode.contains(TermMode::ORIGIN) {
+            row.saturating_sub(top)
+        } else {
+            row
+        };
+        output.extend_from_slice(
+            format!("\x1b[{};{}H", row + 1, cursor.point.column.0 + 1).as_bytes(),
+        );
+        push_cursor_style(output, &cursor.template, term.colors(), theme);
+        let link = cursor.template.hyperlink();
+        push_hyperlink(output, link.as_ref().map(|link| link.uri()));
+    };
+    restore_cursor(&mut output, &term.grid().saved_cursor);
+    output.extend_from_slice(b"\x1b7");
+    let cursor = &term.grid().cursor;
+    restore_cursor(&mut output, cursor);
+    // CUP clears the pending wrap bit. Repainting the margin cell restores
+    // it so the first character received after attachment wraps correctly.
+    if cursor.input_needs_wrap {
+        let row = &term.grid()[cursor.point.line];
+        let mut column = cursor.point.column.0;
+        if row[Column(column)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            column = column.saturating_sub(1);
+        }
+        if column != cursor.point.column.0 {
+            output.extend_from_slice(b"\x1b[D");
+        }
+        let cell = &row[Column(column)];
+        push_sgr(&mut output, &style_for(cell, term.colors(), theme));
+        let mut encoded = [0; 4];
+        output.extend_from_slice(cell.c.encode_utf8(&mut encoded).as_bytes());
+        for mark in cell.zerowidth().into_iter().flatten() {
+            output.extend_from_slice(mark.encode_utf8(&mut encoded).as_bytes());
+        }
+        push_cursor_style(&mut output, &cursor.template, term.colors(), theme);
+    }
+    for (flag, number) in [(TermMode::INSERT, 4), (TermMode::LINE_FEED_NEW_LINE, 20)] {
+        output.extend_from_slice(
+            format!(
+                "\x1b[{}{}",
+                number,
+                if mode.contains(flag) { 'h' } else { 'l' }
+            )
+            .as_bytes(),
+        );
+    }
+    let style = term.cursor_style();
+    let shape = match style.shape {
+        CursorShape::Underline => 3,
+        CursorShape::Beam => 5,
+        _ => 1,
+    } + u8::from(!style.blinking);
+    output.extend_from_slice(format!("\x1b[{} q", shape).as_bytes());
+    output
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn kero_alacritty_request_remote_bootstrap(
+    handle: *mut KeroTerminal,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+    let terminal = &*handle;
+    let Some(notifier) = &terminal.notifier else {
+        return false;
+    };
+    let proxy = terminal.event_proxy.clone();
+    notifier
+        .0
+        .send(GraphicsMsg::RemoteBootstrap {
+            theme: terminal.shared.lock().theme,
+            reply: Box::new(move |data| proxy.emit(KERO_EVENT_REMOTE_BOOTSTRAP, &data)),
+        })
+        .is_ok()
 }
 
 /// Writes the whole buffer — scrollback and screen — as a styled VT stream
@@ -2463,6 +2672,167 @@ mod tests {
             b"\x1b_Ga=T,f=32,s=1,v=1,i=7;AQID/w==\x1b\\",
         );
         assert!(graphics.lock().state.has_placements());
+    }
+
+    #[test]
+    fn remote_images_cannot_read_or_remove_renderer_files() {
+        use base64::Engine;
+        let path = std::env::temp_dir().join(format!(
+            "tty-graphics-protocol-kero-test-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, [1u8, 2, 3]).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap());
+        let events = Mutex::new(Vec::<(u32, Vec<u8>)>::new());
+        let mut config: KeroConfig = unsafe { std::mem::zeroed() };
+        config.columns = 80;
+        config.rows = 24;
+        let handle = unsafe {
+            kero_alacritty_new_remote(
+                &config,
+                &theme(),
+                capture_event,
+                &events as *const _ as *mut c_void,
+            )
+        };
+        assert!(!handle.is_null());
+        for medium in ['f', 't', 's'] {
+            for chunked in [false, true] {
+                let frames = if chunked {
+                    format!(
+                        "\x1b_Ga=T,t={medium},f=24,s=1,v=1,i=7,m=1;{encoded}\x1b\\\x1b_Gm=0;\x1b\\"
+                    )
+                } else {
+                    format!("\x1b_Ga=T,t={medium},f=24,s=1,v=1,i=7;{encoded}\x1b\\")
+                };
+                events.lock().unwrap().clear();
+                unsafe {
+                    kero_alacritty_feed(handle, frames.as_ptr(), frames.len());
+                }
+                assert!(path.exists(), "remote image deleted the local file");
+                assert!(!unsafe { &*handle }
+                    .kitty_graphics
+                    .lock()
+                    .state
+                    .has_placements());
+                assert!(events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(kind, data)| *kind == KERO_EVENT_REMOTE_INPUT
+                        && String::from_utf8_lossy(data).contains("ENOTSUP")));
+            }
+        }
+        // Denying filesystem access must not disable ordinary inline images.
+        let inline = b"\x1b_Ga=T,f=24,s=1,v=1,i=8;AQID\x1b\\";
+        unsafe {
+            kero_alacritty_feed(handle, inline.as_ptr(), inline.len());
+        }
+        assert!(unsafe { &*handle }
+            .kitty_graphics
+            .lock()
+            .state
+            .has_placements());
+        unsafe {
+            kero_alacritty_free(handle);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ghostty_remote_filter_handles_every_frame_boundary() {
+        let inline = "\x1b_Ga=T,t=d,f=24,s=1,v=1;AQID\x1b\\";
+        let text = "before中文\x1b[31m";
+        for medium in ["f", "t", "s", "f,t=d", "invalid"] {
+            let input = format!("{text}\x1b_Ga=T,t={medium};L3RtcC9maWxl\x1b\\{inline}after");
+            let expected = format!("{text}{inline}after");
+            for split in 0..=input.len() {
+                let filter = kero_remote_output_filter_new();
+                let mut actual = Vec::new();
+                for chunk in [&input.as_bytes()[..split], &input.as_bytes()[split..]] {
+                    let mut len = 0;
+                    unsafe {
+                        let bytes = kero_remote_output_filter_feed(
+                            filter,
+                            chunk.as_ptr(),
+                            chunk.len(),
+                            &mut len,
+                        );
+                        actual.extend_from_slice(std::slice::from_raw_parts(bytes, len));
+                    }
+                }
+                unsafe {
+                    kero_remote_output_filter_free(filter);
+                }
+                assert_eq!(
+                    actual,
+                    expected.as_bytes(),
+                    "medium {medium}, split {split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ghostty_remote_filter_drops_embedded_commands() {
+        for input in [
+            b"before\x1b_Gt=d;\x1b_Gt=t;L3RtcC9maWxl\x1b\\after".as_slice(),
+            b"before\x1b_X\x1b_Gt=t;L3RtcC9maWxl\x1b\\after",
+            b"before\x9fGt=t;L3RtcC9maWxl\x9cafter",
+        ] {
+            for split in 0..=input.len() {
+                let filter = kero_remote_output_filter_new();
+                let mut actual = Vec::new();
+                for chunk in [&input[..split], &input[split..]] {
+                    let mut len = 0;
+                    unsafe {
+                        let bytes = kero_remote_output_filter_feed(
+                            filter,
+                            chunk.as_ptr(),
+                            chunk.len(),
+                            &mut len,
+                        );
+                        actual.extend_from_slice(std::slice::from_raw_parts(bytes, len));
+                    }
+                }
+                unsafe {
+                    kero_remote_output_filter_free(filter);
+                }
+                assert_eq!(actual, b"beforeafter", "split {split}");
+            }
+        }
+    }
+
+    #[test]
+    fn remote_bootstrap_preserves_live_cursor_modes_and_following_output() {
+        for initial in [
+            b"\x1b[?1h\x1b[?2004h\x1b[10;5HPrompt> ".as_slice(),
+            b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[3;20r\x1b[?6h\x1b[4;7H\x1b[32mTUI\x1b7\x1b[6;9H\x1b[4 q",
+            b"\x1b[24;73H12345678",
+        ] {
+            let size = TermSize { columns: 80, screen_lines: 24 };
+            let mut host = Term::new(Config::default(), &size, VoidListener);
+            let mut host_parser: ansi::Processor = ansi::Processor::new();
+            let mut host_tracker = KittyGraphicsCursorTracker::default();
+            advance_text(&mut host_tracker, &mut host_parser, &mut host, initial, false);
+            let bootstrap = serialize_remote_vt(&host, &theme(), &host_tracker);
+            let mut remote = Term::new(Config::default(), &size, VoidListener);
+            let mut remote_parser: ansi::Processor = ansi::Processor::new();
+            let mut remote_tracker = KittyGraphicsCursorTracker::default();
+            advance_text(&mut remote_tracker, &mut remote_parser, &mut remote, &bootstrap, false);
+            assert_eq!(host.mode(), remote.mode());
+            assert_eq!(host.grid().cursor.point, remote.grid().cursor.point);
+            assert_eq!(host.grid().cursor.input_needs_wrap, remote.grid().cursor.input_needs_wrap);
+            assert_eq!(host_tracker.scroll_region(24), remote_tracker.scroll_region(24));
+            assert_eq!(serialize_vt(&host, &theme(), false), serialize_vt(&remote, &theme(), false));
+            // Check behavior after replay, not merely the emitted escape text.
+            for next in [b"X\r\nnext".as_slice(), b"\x1b8restored", b"\x1b[18;1H\n\n\n"] {
+                advance_text(&mut host_tracker, &mut host_parser, &mut host, next, false);
+                advance_text(&mut remote_tracker, &mut remote_parser, &mut remote, next, false);
+                assert_eq!(host.grid().cursor.point, remote.grid().cursor.point);
+                assert_eq!(serialize_vt(&host, &theme(), false), serialize_vt(&remote, &theme(), false));
+            }
+        }
     }
 
     #[test]

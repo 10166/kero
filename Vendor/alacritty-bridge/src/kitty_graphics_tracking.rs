@@ -59,6 +59,10 @@ pub(crate) struct KittyGraphicsCursorTracker {
 }
 
 impl KittyGraphicsCursorTracker {
+    pub(crate) fn scroll_region(&self, screen_lines: usize) -> (usize, usize) {
+        self.region.bounds(screen_lines)
+    }
+
     pub(crate) fn region_covers_full_screen(&self, screen_lines: usize) -> bool {
         self.region.covers_full_screen(screen_lines)
     }
@@ -430,6 +434,22 @@ pub(crate) fn advance_text<T: EventListener>(
     effects
 }
 
+pub(crate) fn finish_sync<T: EventListener>(
+    tracker: &mut KittyGraphicsCursorTracker,
+    parser: &mut ansi::Processor,
+    term: &mut Term<T>,
+    track_scrolls: bool,
+) -> KittyGraphicsTextEffects {
+    let mut effects = KittyGraphicsTextEffects::default();
+    parser.stop_sync(&mut TrackingHandler {
+        term,
+        tracker,
+        effects: &mut effects,
+        track_scrolls,
+    });
+    effects
+}
+
 pub(crate) fn advance_cursor<T: EventListener>(
     term: &mut Term<T>,
     columns: u32,
@@ -479,7 +499,7 @@ mod tests {
             &mut tracker,
             &mut parser,
             &mut term,
-            b"\x1b[?2026h\x1b[10;5H",
+            b"\x1b[?2026h\x1b[3;20r\x1b[10;5H",
             false,
         );
 
@@ -487,9 +507,10 @@ mod tests {
         assert_eq!(term.grid().cursor.point.column.0, 0);
         assert!(parser.sync_bytes_count() > 0);
 
-        parser.stop_sync(&mut term);
+        finish_sync(&mut tracker, &mut parser, &mut term, false);
 
         assert_eq!(term.grid().cursor.point.line.0, 9);
         assert_eq!(term.grid().cursor.point.column.0, 4);
+        assert_eq!(tracker.scroll_region(24), (2, 20));
     }
 }

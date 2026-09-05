@@ -267,7 +267,7 @@ protocol TerminalBackendSurface: NSView {
     func receiveRemoteInput(_ data: Data)
 
     /// Styled VT snapshot used to seed a newly attached remote renderer.
-    func remoteBootstrap() -> Data?
+    func remoteBootstrap() async -> Data?
 }
 
 /// What a terminal surface reports back to the session that owns it. Each

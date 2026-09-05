@@ -194,6 +194,13 @@ int32_t kero_alacritty_child_pid(KeroTerminal *handle);
 int32_t kero_alacritty_foreground_pid(KeroTerminal *handle);
 
 void kero_alacritty_write(KeroTerminal *handle, const uint8_t *bytes, size_t len);
+#define KERO_EVENT_REMOTE_BOOTSTRAP 17u
+bool kero_alacritty_request_remote_bootstrap(KeroTerminal *handle);
+typedef struct KeroRemoteOutputFilter KeroRemoteOutputFilter;
+KeroRemoteOutputFilter *kero_remote_output_filter_new(void);
+void kero_remote_output_filter_free(KeroRemoteOutputFilter *filter);
+const uint8_t *kero_remote_output_filter_feed(KeroRemoteOutputFilter *filter,
+    const uint8_t *bytes, size_t len, size_t *output_len);
 /// Writes protocol input without moving the user's scrollback viewport.
 void kero_alacritty_write_control(KeroTerminal *handle, const uint8_t *bytes, size_t len);
 /// Completes a pending OSC 52 clipboard read. `request_id` is the little-endian

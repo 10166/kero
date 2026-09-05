@@ -15,6 +15,9 @@ nonisolated final class AlacrittyPTYAdapter: @unchecked Sendable {
     private var pendingOutput: [Data] = []
     private var pendingExit = false
     private var remotelyControlled = false
+    private var snapshotCapture: RemoteTerminalStateCapture?
+    private var pausedOutput: [Data] = []
+    private var pausedBytes = 0
     private var lastLocalViewport = InMemoryTerminalViewport(
         columns: 80,
         rows: 24,
@@ -77,13 +80,18 @@ nonisolated final class AlacrittyPTYAdapter: @unchecked Sendable {
         let exited = pendingExit
         pendingOutput.removeAll(keepingCapacity: false)
         pendingExit = false
-        lock.unlock()
         queued.forEach { output($0, false) }
         if exited { exit() }
+        lock.unlock()
     }
 
     func writeFromSurface(_ data: Data) {
         lock.lock()
+        if let snapshotCapture {
+            lock.unlock()
+            snapshotCapture.receive(data)
+            return
+        }
         guard !remotelyControlled, let handle, !data.isEmpty else {
             lock.unlock()
             return
@@ -132,6 +140,7 @@ nonisolated final class AlacrittyPTYAdapter: @unchecked Sendable {
 
     func endRemoteControl() {
         lock.lock()
+        snapshotCapture?.cancel()
         remotelyControlled = false
         if let handle { resize(lastLocalViewport, handle: handle) }
         lock.unlock()
@@ -144,6 +153,7 @@ nonisolated final class AlacrittyPTYAdapter: @unchecked Sendable {
             return
         }
         self.handle = nil
+        snapshotCapture?.cancel()
         outputHandler = nil
         exitHandler = nil
         lock.unlock()
@@ -154,10 +164,17 @@ nonisolated final class AlacrittyPTYAdapter: @unchecked Sendable {
     fileprivate func receive(kind: UInt32, data: Data) {
         lock.lock()
         if kind == KERO_EVENT_RAW_OUTPUT {
-            if let outputHandler {
-                let forwardRemotely = remotelyControlled
+            if let snapshotCapture {
+                pausedOutput.append(data)
+                pausedBytes += data.count
+                if pausedBytes > 8 * 1024 * 1024 { snapshotCapture.cancel() }
                 lock.unlock()
+            } else if let outputHandler {
+                let forwardRemotely = remotelyControlled
+                // Enqueuing Ghostty output under this lock makes pausing a
+                // real boundary; an earlier callback cannot overtake queries.
                 outputHandler(data, forwardRemotely)
+                lock.unlock()
             } else {
                 if pendingOutput.count < 128 { pendingOutput.append(data) }
                 lock.unlock()
@@ -173,6 +190,23 @@ nonisolated final class AlacrittyPTYAdapter: @unchecked Sendable {
         } else {
             lock.unlock()
         }
+    }
+
+    func beginSnapshotCapture(_ capture: RemoteTerminalStateCapture) {
+        lock.lock()
+        snapshotCapture = capture
+        lock.unlock()
+    }
+
+    func endSnapshotCapture(_ capture: RemoteTerminalStateCapture) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard snapshotCapture === capture else { return }
+        snapshotCapture = nil
+        let queued = pausedOutput
+        pausedOutput.removeAll(keepingCapacity: false)
+        pausedBytes = 0
+        queued.forEach { outputHandler?($0, remotelyControlled) }
     }
 
     private func write(_ data: Data, to handle: OpaquePointer) {

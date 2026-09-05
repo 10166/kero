@@ -282,8 +282,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         )
     }
 
-    func remoteBootstrap() -> Data? {
-        surface.remoteBootstrap()
+    func remoteBootstrap() async -> Data? {
+        await surface.remoteBootstrap()
     }
 
     /// Clears the emulator's visible screen and scrollback, then asks the

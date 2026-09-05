@@ -57,6 +57,24 @@ func TestSessionsAreDeviceBoundAndRevocationInvalidatesThem(t *testing.T) {
 	if !store.DeviceBelongsTo(ctx, "account-b", testDeviceID) {
 		t.Fatal("revoking one account affected another account")
 	}
+	if err := store.PutSession(ctx, "racing-token", "account-a", testDeviceID, "access", expiry); err == nil {
+		t.Fatal("issued a new token to a revoked device")
+	}
+	if err := store.EnrollDevice(ctx, "account-a", Device{ID: testDeviceID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Authenticate(ctx, "access-secret"); err == nil {
+		t.Fatal("re-enrollment revived revoked access")
+	}
+	if _, _, err := store.ConsumeRefresh(ctx, "refresh-secret"); err == nil {
+		t.Fatal("re-enrollment revived revoked refresh access")
+	}
+	if err := store.PutSession(ctx, "new-access", "account-a", testDeviceID, "access", expiry); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Authenticate(ctx, "new-access"); err != nil {
+		t.Fatal("re-enrolled device could not use its new credentials", err)
+	}
 }
 
 func TestLoginGrantIsOneTimeAndTokensAreHashed(t *testing.T) {

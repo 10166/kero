@@ -31,6 +31,16 @@ installed Kero without clobbering it: settings go to
 `~/.config/kero-dev/config.toml`, and the session snapshot, sidebar widths, and
 Sparkle preferences live under the separate bundle id.
 
+## Remote-control regression checks
+
+After a Debug build on Apple Silicon, run `tests/run-remote-checks.sh /path/to/DerivedData`.
+It exercises the production credential-refresh code with simulated relay failures
+and replays snapshots through the bundled Ghostty emulator. The terminal checks
+need an awake display to create their AppKit windows.
+
+Run `cargo test --manifest-path Vendor/alacritty-bridge/Cargo.toml` for the
+Alacritty bridge and `go test ./...` from `relay/` for the relay.
+
 ## Website and docs
 
 The site is in [`web/`](web/README.md); user documentation is MDX under

@@ -93,9 +93,10 @@ extension KeroTerminalView {
         configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         self.controller = controller
         applyAppearance()
-        remoteConnection.onData = { [weak session] data, bootstrap in
+        let outputFilter = RemoteOutputFilter()
+        remoteConnection.onData = { [weak session, outputFilter] data, bootstrap in
             if bootstrap { session?.receive(Data("\u{1b}c".utf8)) }
-            session?.receive(data)
+            session?.receive(outputFilter.receive(data))
         }
     }
 
@@ -151,8 +152,25 @@ extension KeroTerminalView {
         ptyAdapter?.writeFromRemote(data)
     }
 
-    func remoteBootstrap() -> Data? {
-        TerminalHistorySerializer.rawCapture(from: self)
+    func remoteBootstrap() async -> Data? {
+        guard let ptyAdapter, let inMemorySession else { return nil }
+        let capture = RemoteTerminalStateCapture()
+        let output = remoteOutput
+        remoteOutput = nil
+        ptyAdapter.beginSnapshotCapture(capture)
+        defer {
+            if isRemotelyControlled { remoteOutput = output }
+            ptyAdapter.endSnapshotCapture(capture)
+        }
+        guard let reports = await capture.read(send: { inMemorySession.receive($0) }) else { return nil }
+        // Drain remote-output callbacks enqueued before PTY delivery paused.
+        // Those bytes are already in the snapshot and must not be replayed.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        guard isRemotelyControlled,
+              let screen = TerminalHistorySerializer.rawCapture(from: self) else { return nil }
+        return RemoteTerminalStateCapture.bootstrap(screen: screen, reports: reports)
     }
 
     // MARK: - Configuration

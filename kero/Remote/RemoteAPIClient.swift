@@ -219,6 +219,11 @@ enum RemoteAPIError: Error {
     case authenticationDidNotStart
     case randomGenerationFailed
     case requestFailed(Int)
+
+    static func invalidatesRefreshToken(_ error: Error) -> Bool {
+        if case .requestFailed(401) = error as? RemoteAPIError { return true }
+        return false
+    }
 }
 
 extension RemoteAPIError: LocalizedError {
