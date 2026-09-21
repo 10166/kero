@@ -23,3 +23,7 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[patch.crates-io]
+alacritty_terminal = { path = "../alacritty_terminal" }
+vte = { path = "../vte" }

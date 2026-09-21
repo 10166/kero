@@ -3,6 +3,11 @@
 // lifecycle is exercised without exposing test-only API in the application.
 import AppKit
 
+@MainActor final class HostGroups {
+    static let shared = HostGroups()
+    func isExpanded(_ id: UUID) -> Bool { true }
+}
+
 enum PaneSplitAxis: String, Codable, Sendable { case horizontal, vertical }
 @MainActor final class AppSettings {
     static let shared = AppSettings()

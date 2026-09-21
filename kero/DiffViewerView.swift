@@ -86,6 +86,20 @@ final class DiffWebModel: nonisolated ObservableObject {
 @MainActor
 final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     nonisolated let id = UUID()
+    let hostID: UUID
+    private var saving = false
+    private var saveTask: Task<Void,Never>?
+
+    var draft: EditorDraft? {
+        isDirty ? EditorDraft(text:editedNewContent,baseline:savedNewContent,sha256:HostService.hash(Data(savedNewContent.utf8)),oldContent:web.oldContent) : nil
+    }
+    func restoreDraft(_ draft: EditorDraft) {
+        reloadGeneration &+= 1
+        savedNewContent=draft.baseline; editedNewContent=draft.text
+        web.oldContent=draft.oldContent ?? ""; web.newContent=draft.text
+        web.fileName=(path as NSString).lastPathComponent; web.fileID=path
+        isEditable=true; web.canEdit=true; isDirty=true; isLoading=false; error=nil
+    }
 
     /// Absolute repository root the diff runs in.
     let repoRoot: String
@@ -131,6 +145,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     private var reloadGeneration: UInt = 0
 
     init(
+        hostID: UUID = HostGroups.localID,
         repoRoot: String,
         path: String,
         staged: Bool,
@@ -140,6 +155,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         commitParentHash: String? = nil,
         commitStatus: Character? = nil
     ) {
+        self.hostID = hostID
         self.repoRoot = repoRoot
         self.path = path
         self.staged = staged
@@ -183,7 +199,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     func reload() {
         // Keep the editor's document and undo history stable until the user
         // leaves edit mode, and never replace an unsaved buffer from disk.
-        guard !isEditing, !isDirty else { return }
+        guard !isEditing, !isDirty, !saving, HostGroups.shared.isExpanded(hostID) else { return }
         reloadGeneration &+= 1
         let generation = reloadGeneration
         isLoading = true
@@ -195,8 +211,10 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         let untracked = untracked
         let commitHash = commitHash
 
+        let service = HostGroups.shared.service(hostID)
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
+                HostService.$current.withValue(service) {
                 var failureVar: String?
                 let unmerged = commitHash == nil && !staged
                     && Self.isUnmerged(path: path, in: root)
@@ -240,6 +258,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
                     unmerged: unmerged,
                     editable: editable
                 )
+                }
             }.value
             guard let self, self.reloadGeneration == generation else { return }
             self.isLoading = false
@@ -312,18 +331,25 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     func save() {
-        guard isEditable, isDirty else { return }
-        let fileURL = URL(fileURLWithPath: repoRoot, isDirectory: true)
-            .appendingPathComponent(path)
-        do {
-            try editedNewContent.write(to: fileURL, atomically: true, encoding: .utf8)
-            savedNewContent = editedNewContent
-            isDirty = false
-            saveError = nil
-        } catch {
-            saveError = error.localizedDescription
+        guard isEditable, isDirty, !saving else { return }
+        guard HostGroups.shared.isExpanded(hostID) else { saveError = "Host is disconnected. Your edits have been kept."; return }
+        let path = (repoRoot as NSString).appendingPathComponent(path)
+        let value = editedNewContent, expected = HostService.hash(Data(savedNewContent.utf8))
+        let service = HostGroups.shared.service(hostID); saving = true
+        saveTask = Task { [weak self] in
+            let result = await Task.detached { Result { try service.write(path,data:Data(value.utf8),expected:expected) } }.value
+            guard let self else { return }; self.saving = false
+            switch result {
+            case .success: self.savedNewContent = value; self.isDirty = self.editedNewContent != value; self.saveError = nil
+            case .failure(let error): self.saveError = error.localizedDescription
+            }
         }
     }
+    func saveAndWait() async -> Bool {
+        save(); await saveTask?.value
+        return !isDirty && saveError == nil
+    }
+
 
     private nonisolated enum GitContent {
         case missing
@@ -374,6 +400,13 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     private nonisolated static func runGitData(
         _ args: [String], in root: String
     ) -> (status: Int32, stdout: Data, stderr: String) {
+        if let service = HostService.current {
+            do {
+                let response = try service.request("git",path:root,fields:["arguments":args])
+                guard let output = response["output"] as? [String:Any] else { return (-1,Data(),"Invalid Git response") }
+                return (Int32(output["status"] as? Int ?? -1),Data(base64Encoded:output["stdout"] as? String ?? "") ?? Data(),String(decoding:Data(base64Encoded:output["stderr"] as? String ?? "") ?? Data(),as:UTF8.self))
+            } catch { return (-1,Data(),error.localizedDescription) }
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = args
@@ -453,6 +486,9 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     /// symlink atomically would replace the link itself with a regular file.
     private nonisolated static func isEditableWorktreeFile(root: String, path: String) -> Bool {
         let url = URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent(path)
+        if let service = HostService.current {
+            return (try? service.directory(url.deletingLastPathComponent().path))?.contains{$0.name == url.lastPathComponent && !$0.is_dir && !$0.is_symlink} == true
+        }
         guard (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil,
               let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               (attributes[.type] as? FileAttributeType) == .typeRegular
@@ -464,6 +500,16 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         root: String, path: String, error: inout String?
     ) -> String {
         let url = URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent(path)
+        if let service = HostService.current {
+            do {
+                let data = try service.read(url.path).data
+                guard !data.contains(0), let text = String(data:data,encoding:.utf8) else { error = "Binary file"; return "" }
+                return text
+            } catch let failure {
+                if (try? service.directory(url.deletingLastPathComponent().path))?.contains(where:{$0.name == url.lastPathComponent}) == false { return "" }
+                error = failure.localizedDescription; return ""
+            }
+        }
         let fm = FileManager.default
         if let destination = try? fm.destinationOfSymbolicLink(atPath: url.path) {
             guard destination.utf8.count <= maxBytes else {

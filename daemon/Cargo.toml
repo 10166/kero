@@ -1,0 +1,31 @@
+[package]
+name = "kero-daemon"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kero-terminal-state = { path = "../terminal-state" }
+anyhow = "1"
+base64 = "0.22"
+libc = "0.2"
+portable-pty = "0.8"
+russh = "0.62"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "net", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+uuid = { version = "1", features = ["v4", "serde"] }
+tty7-core = { path = "../Vendor/tty7-core" }
+
+[patch.crates-io]
+alacritty_terminal = { path = "../Vendor/alacritty_terminal" }
+vte = { path = "../Vendor/vte" }
+russh = { git = "https://github.com/ayamir/russh", rev = "0d1d073350ed823069252075cbf3db9672d5b490" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

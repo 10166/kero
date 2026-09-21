@@ -290,6 +290,7 @@ struct ContentView: View {
         )) { _ in
             syncGit()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .keroHostGroupsChanged)) { _ in syncGit() }
         .onChange(of: commandCompletionSequences) { syncGit() }
         .onChange(of: manager.selectedProjectID) {
             tabSplitDrag.cancel()
@@ -338,7 +339,7 @@ struct ContentView: View {
             followingSessionAt: session.currentDirectoryPath,
             foregroundAt: session.foregroundDirectoryPath
         ).root
-        git.sync(root: root)
+        git.sync(root: root, hostID: project.hostID)
     }
 
     @ViewBuilder

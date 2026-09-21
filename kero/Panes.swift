@@ -37,6 +37,10 @@ enum PaneContent: nonisolated Identifiable {
 }
 
 extension PaneContent {
+    @MainActor var session: TerminalSession? {
+        if case .session(let session) = self { return session }
+        return nil
+    }
     /// Label for the tab strip and pane chrome — the focused content's title.
     @MainActor var title: String {
         switch self {
@@ -106,8 +110,9 @@ enum PaneSplitAxis: String, Codable, Sendable {
 /// One tile in a tab's layout. The content object is long-lived while the pane
 /// itself is a value inside the split tree.
 struct Pane: nonisolated Identifiable {
-    let id = UUID()
+    let id: UUID
     var content: PaneContent
+    init(id: UUID = UUID(), content: PaneContent) { self.id = id; self.content = content }
 }
 
 /// A binary split in the pane tree. `fraction` is the first child's share of
@@ -374,7 +379,7 @@ struct PaneLayoutGeometry {
 /// remain mounted in their corresponding leaves.
 @MainActor
 final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
-    nonisolated let id = UUID()
+    nonisolated let id: UUID
 
     /// User-assigned tab name; when nil the tab title follows the focused
     /// pane's content (terminal title, file name, diff title) — the same
@@ -400,13 +405,15 @@ final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
 
     /// A fresh single-pane tab wrapping one piece of content.
     init(content: PaneContent) {
+        id = UUID()
         let pane = Pane(content: content)
         layout = .pane(pane)
         focusedPaneID = pane.id
     }
 
     /// Restores a saved layout.
-    init(layout: PaneNode, focusedPaneID: UUID) {
+    init(layout: PaneNode, focusedPaneID: UUID, id: UUID = UUID()) {
+        self.id = id
         self.layout = layout
         self.focusedPaneID = focusedPaneID
     }

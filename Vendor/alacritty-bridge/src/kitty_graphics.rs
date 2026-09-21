@@ -4,7 +4,7 @@
 //! https://github.com/lassejlv/termy/tree/d094009217c278701abdecf906dc1903e6b01bc5
 //! under the MIT license in `../TERMY_LICENSE`.
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use flate2::read::ZlibDecoder;
 use std::{
     collections::{HashMap, VecDeque},
@@ -136,9 +136,40 @@ pub(crate) struct KittyGraphicsInterceptor {
     oversized: bool,
     utf8_continuations: u8,
     drop_other_apc: bool,
+    command_limit: usize,
 }
 
 impl KittyGraphicsInterceptor {
+    pub(crate) fn canonical() -> Self {
+        Self {
+            command_limit: 12 * 1024 * 1024,
+            drop_other_apc: true,
+            ..Default::default()
+        }
+    }
+    pub(crate) fn checkpoint_pending(&self) -> Result<Vec<u8>, &'static str> {
+        if self.oversized {
+            return Err("unfinished graphics command exceeds limit");
+        }
+        let mut bytes = match self.state {
+            InterceptorState::Ground => Vec::new(),
+            InterceptorState::Escape => b"\x1b".to_vec(),
+            InterceptorState::ApcStart { c1: false } => b"\x1b_".to_vec(),
+            InterceptorState::ApcStart { c1: true } => vec![0x9f],
+            InterceptorState::OtherApc => b"\x1b_X".to_vec(),
+            InterceptorState::OtherApcEscape => b"\x1b_X\x1b".to_vec(),
+            InterceptorState::Kitty | InterceptorState::KittyEscape => {
+                let mut bytes = b"\x1b_G".to_vec();
+                bytes.extend_from_slice(&self.command);
+                bytes
+            }
+        };
+        if matches!(self.state, InterceptorState::KittyEscape) {
+            bytes.push(0x1b);
+        }
+        Ok(bytes)
+    }
+
     pub(crate) fn remote_filter() -> Self {
         Self {
             drop_other_apc: true,
@@ -147,6 +178,11 @@ impl KittyGraphicsInterceptor {
     }
 
     pub(crate) fn process(&mut self, bytes: &[u8]) -> Vec<KittyGraphicsItem> {
+        let limit = if self.command_limit == 0 {
+            MAX_COMMAND_BYTES
+        } else {
+            self.command_limit
+        };
         let mut items = Vec::new();
         let mut text = Vec::with_capacity(bytes.len());
         let flush_text = |items: &mut Vec<KittyGraphicsItem>, text: &mut Vec<u8>| {
@@ -236,7 +272,7 @@ impl KittyGraphicsInterceptor {
                             self.oversized,
                         )));
                         self.state = InterceptorState::Ground;
-                    } else if self.command.len() < MAX_COMMAND_BYTES {
+                    } else if self.command.len() < limit {
                         self.command.push(byte);
                     } else {
                         self.oversized = true;
@@ -251,7 +287,7 @@ impl KittyGraphicsInterceptor {
                         )));
                         self.state = InterceptorState::Ground;
                     } else {
-                        if self.command.len() + 2 <= MAX_COMMAND_BYTES {
+                        if self.command.len() + 2 <= limit {
                             self.command.extend_from_slice(&[0x1b, byte]);
                         } else {
                             self.oversized = true;
@@ -312,7 +348,7 @@ struct PlacementContext {
     screen: KittyGraphicsScreen,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum KittyGraphicsScreen {
     #[default]
     Primary,
@@ -364,9 +400,10 @@ pub(crate) struct KittyGraphicsApplyResult {
 #[derive(Default)]
 pub(crate) struct KittyGraphicsState {
     deny_file_transfers: bool,
-    images: HashMap<u32, StoredImage>,
+    storage_limit: usize,
+    images: HashMap<(KittyGraphicsScreen, u32), StoredImage>,
     placements: Vec<Placement>,
-    insertion_order: VecDeque<u32>,
+    insertion_order: VecDeque<(KittyGraphicsScreen, u32)>,
     pending: Option<PendingUpload>,
     next_anonymous_id: u32,
     stored_bytes: usize,
@@ -397,6 +434,84 @@ impl KittyGraphicsStore {
 }
 
 impl KittyGraphicsState {
+    pub(crate) fn canonical() -> Self {
+        Self {
+            deny_file_transfers: true,
+            storage_limit: 8 * 1024 * 1024,
+            ..Default::default()
+        }
+    }
+    fn byte_limit(&self) -> usize {
+        if self.storage_limit == 0 {
+            MAX_IMAGE_BYTES
+        } else {
+            self.storage_limit
+        }
+    }
+    /// Upload once, then place while reconstructing each screen's rows. All
+    /// restored payloads are inline pixels; no filesystem reads or replies.
+    pub(crate) fn checkpoint_images(&self, output: &mut Vec<u8>, screen: KittyGraphicsScreen) {
+        let mut ids: Vec<_> = self
+            .images
+            .keys()
+            .filter_map(|(s, id)| (*s == screen).then_some(*id))
+            .collect();
+        ids.sort_unstable();
+        for id in ids {
+            let image = &self.images[&(screen, id)];
+            let encoded = BASE64.encode(&image.png);
+            let chunks: Vec<_> = encoded.as_bytes().chunks(4096).collect();
+            for (index, chunk) in chunks.iter().enumerate() {
+                let more = usize::from(index + 1 < chunks.len());
+                if index == 0 {
+                    output.extend_from_slice(
+                        format!("\x1b_Ga=t,f=100,i={id},q=2,m={more};").as_bytes(),
+                    );
+                } else {
+                    output.extend_from_slice(format!("\x1b_Gm={more};").as_bytes());
+                }
+                output.extend_from_slice(chunk);
+                output.extend_from_slice(b"\x1b\\");
+            }
+        }
+    }
+    pub(crate) fn checkpoint_row(
+        &self,
+        output: &mut Vec<u8>,
+        screen: KittyGraphicsScreen,
+        line: i64,
+        viewport_row: usize,
+    ) {
+        for p in self
+            .placements
+            .iter()
+            .filter(|p| p.screen == screen && p.anchor_line == line)
+        {
+            output.extend_from_slice(format!("\x1b7\x1b[{};{}H\x1b_Ga=p,i={},p={},x={},y={},w={},h={},c={},r={},X={},Y={},z={},C=1,q=2;\x1b\\\x1b8",
+                viewport_row + 1, p.column + 1, p.image_id, p.placement_id, p.source_x, p.source_y,
+                p.source_width, p.source_height, p.display_columns, p.display_rows, p.x_offset, p.y_offset, p.z_index).as_bytes());
+        }
+    }
+    /// The protocol anchors a chunked image when its final chunk arrives.
+    /// Rebuild only the buffered upload; subsequent live output supplies its
+    /// cursor position, even if text/scrolling occurred between the chunks.
+    pub(crate) fn checkpoint_upload(&self, output: &mut Vec<u8>) {
+        let Some(pending) = &self.pending else {
+            return;
+        };
+        let mut command = pending.command.clone();
+        command.control.retain(|(key, _)| *key != 'm');
+        command.control.push(('m', "1".into()));
+        let encoded = BASE64.encode(&pending.decoded);
+        let mut chunks = encoded.as_bytes().chunks(4096);
+        command.payload = chunks.next().unwrap_or_default().to_vec();
+        command.encode(output);
+        for chunk in chunks {
+            output.extend_from_slice(b"\x1b_Gm=1;");
+            output.extend_from_slice(chunk);
+            output.extend_from_slice(b"\x1b\\");
+        }
+    }
     pub(crate) fn apply(
         &mut self,
         command: KittyGraphicsCommand,
@@ -442,7 +557,7 @@ impl KittyGraphicsState {
         }
 
         let decoded = match BASE64.decode(&command.payload) {
-            Ok(decoded) if decoded.len() <= MAX_IMAGE_BYTES => decoded,
+            Ok(decoded) if decoded.len() <= self.byte_limit() => decoded,
             Ok(_) => {
                 let response_command = self
                     .pending
@@ -464,7 +579,7 @@ impl KittyGraphicsState {
 
         let more = command.u32_value('m').unwrap_or(0) == 1;
         if let Some(mut pending) = self.pending.take() {
-            if pending.decoded.len().saturating_add(decoded.len()) > MAX_IMAGE_BYTES {
+            if pending.decoded.len().saturating_add(decoded.len()) > self.byte_limit() {
                 return self.failure(
                     &pending.command,
                     "EFBIG:image payload exceeds storage limit",
@@ -481,7 +596,7 @@ impl KittyGraphicsState {
                     first.control.push((key, value));
                 }
             }
-            return self.finish_upload(first, pending.decoded, pending.context);
+            return self.finish_upload(first, pending.decoded, context);
         }
 
         if more {
@@ -510,7 +625,7 @@ impl KittyGraphicsState {
             .iter()
             .filter(|placement| placement.screen == screen)
             .filter_map(|placement| {
-                let image = self.images.get(&placement.image_id)?;
+                let image = self.images.get(&(screen, placement.image_id))?;
                 let viewport_row = placement
                     .anchor_line
                     .saturating_sub(history_size)
@@ -676,15 +791,15 @@ impl KittyGraphicsState {
 
         let requested_id = command.u32_value('i').unwrap_or(0);
         let image_id = if requested_id == 0 {
-            self.allocate_anonymous_id()
+            self.allocate_anonymous_id(context.screen)
         } else {
             requested_id
         };
-        self.remove_image(image_id);
+        self.remove_image(image_id, context.screen);
         let byte_len = png.len();
         self.next_generation = self.next_generation.wrapping_add(1).max(1);
         self.images.insert(
-            image_id,
+            (context.screen, image_id),
             StoredImage {
                 png: Arc::from(png),
                 width,
@@ -693,10 +808,10 @@ impl KittyGraphicsState {
                 generation: self.next_generation,
             },
         );
-        self.insertion_order.push_back(image_id);
+        self.insertion_order.push_back((context.screen, image_id));
         self.stored_bytes = self.stored_bytes.saturating_add(byte_len);
-        if !self.enforce_quota(Some(image_id)) {
-            self.remove_image(image_id);
+        if !self.enforce_quota(Some((context.screen, image_id))) {
+            self.remove_image(image_id, context.screen);
             return self.failure(&command, "ENOSPC:image storage quota exceeded");
         }
 
@@ -705,7 +820,7 @@ impl KittyGraphicsState {
             match self.add_placement(image_id, &command, context) {
                 Ok(advance) => advance,
                 Err(error) => {
-                    self.remove_image(image_id);
+                    self.remove_image(image_id, context.screen);
                     return self.failure(&command, &error);
                 }
             }
@@ -721,7 +836,7 @@ impl KittyGraphicsState {
         context: PlacementContext,
     ) -> KittyGraphicsApplyResult {
         let image_id = command.u32_value('i').unwrap_or(0);
-        if image_id == 0 || !self.images.contains_key(&image_id) {
+        if image_id == 0 || !self.images.contains_key(&(context.screen, image_id)) {
             return self.failure(&command, "ENOENT:image id not found");
         }
         match self.add_placement(image_id, &command, context) {
@@ -739,9 +854,12 @@ impl KittyGraphicsState {
         if command.u32_value('U').unwrap_or(0) == 1 {
             return Err("EINVAL:Unicode placeholder placements are not supported".into());
         }
+        if self.storage_limit != 0 && self.placements.len() >= 16384 {
+            return Err("ENOSPC:image placement quota exceeded".into());
+        }
         let image = self
             .images
-            .get(&image_id)
+            .get(&(context.screen, image_id))
             .ok_or_else(|| "ENOENT:image id not found".to_owned())?;
         let source_x = command.u32_value('x').unwrap_or(0).min(image.width);
         let source_y = command.u32_value('y').unwrap_or(0).min(image.height);
@@ -852,12 +970,11 @@ impl KittyGraphicsState {
                         || (placement_id != 0 && placement.placement_id != placement_id)
                 });
                 if free_data
-                    && !self
-                        .placements
-                        .iter()
-                        .any(|placement| placement.image_id == image_id)
+                    && !self.placements.iter().any(|placement| {
+                        placement.screen == screen && placement.image_id == image_id
+                    })
                 {
-                    self.remove_image(image_id);
+                    self.remove_image(image_id, screen);
                 }
             }
             'c' => {
@@ -911,7 +1028,7 @@ impl KittyGraphicsState {
             _ => return self.failure(command, "EINVAL:unsupported delete selector"),
         }
         if free_data {
-            self.drop_unplaced_images();
+            self.drop_unplaced_images(screen);
         }
         self.success(command, before != self.placements.len(), None, screen)
     }
@@ -951,11 +1068,11 @@ impl KittyGraphicsState {
         }
     }
 
-    fn allocate_anonymous_id(&mut self) -> u32 {
+    fn allocate_anonymous_id(&mut self, screen: KittyGraphicsScreen) -> u32 {
         if self.next_anonymous_id == 0 {
             self.next_anonymous_id = u32::MAX;
         }
-        while self.images.contains_key(&self.next_anonymous_id) {
+        while self.images.contains_key(&(screen, self.next_anonymous_id)) {
             self.next_anonymous_id = self.next_anonymous_id.saturating_sub(1).max(1);
         }
         let id = self.next_anonymous_id;
@@ -963,8 +1080,8 @@ impl KittyGraphicsState {
         id
     }
 
-    fn enforce_quota(&mut self, protected: Option<u32>) -> bool {
-        while self.stored_bytes > MAX_IMAGE_BYTES {
+    fn enforce_quota(&mut self, protected: Option<(KittyGraphicsScreen, u32)>) -> bool {
+        while self.stored_bytes > self.byte_limit() {
             let Some(candidate) = self.insertion_order.pop_front() else {
                 break;
             };
@@ -972,7 +1089,7 @@ impl KittyGraphicsState {
                 || self
                     .placements
                     .iter()
-                    .any(|placement| placement.image_id == candidate)
+                    .any(|placement| (placement.screen, placement.image_id) == candidate)
             {
                 self.insertion_order.push_back(candidate);
                 if self.insertion_order.iter().all(|id| {
@@ -980,41 +1097,42 @@ impl KittyGraphicsState {
                         || self
                             .placements
                             .iter()
-                            .any(|placement| placement.image_id == *id)
+                            .any(|placement| (placement.screen, placement.image_id) == *id)
                 }) {
                     break;
                 }
                 continue;
             }
-            self.remove_image(candidate);
+            self.remove_image(candidate.1, candidate.0);
         }
-        self.stored_bytes <= MAX_IMAGE_BYTES
+        self.stored_bytes <= self.byte_limit()
     }
 
-    fn drop_unplaced_images(&mut self) {
-        let ids: Vec<u32> = self
+    fn drop_unplaced_images(&mut self, screen: KittyGraphicsScreen) {
+        let ids: Vec<(KittyGraphicsScreen, u32)> = self
             .images
             .keys()
             .copied()
             .filter(|id| {
-                !self
-                    .placements
-                    .iter()
-                    .any(|placement| placement.image_id == *id)
+                id.0 == screen
+                    && !self
+                        .placements
+                        .iter()
+                        .any(|placement| (placement.screen, placement.image_id) == *id)
             })
             .collect();
         for id in ids {
-            self.remove_image(id);
+            self.remove_image(id.1, id.0);
         }
     }
 
-    fn remove_image(&mut self, image_id: u32) {
-        if let Some(image) = self.images.remove(&image_id) {
+    fn remove_image(&mut self, image_id: u32, screen: KittyGraphicsScreen) {
+        if let Some(image) = self.images.remove(&(screen, image_id)) {
             self.stored_bytes = self.stored_bytes.saturating_sub(image.byte_len);
         }
         self.placements
-            .retain(|placement| placement.image_id != image_id);
-        self.insertion_order.retain(|id| *id != image_id);
+            .retain(|placement| placement.screen != screen || placement.image_id != image_id);
+        self.insertion_order.retain(|id| *id != (screen, image_id));
     }
 
     fn success(

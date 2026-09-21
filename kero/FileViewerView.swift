@@ -12,6 +12,18 @@ import SwiftUI
 @MainActor
 final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
     nonisolated let id = UUID()
+    let hostID: UUID
+    private var fingerprint = ""
+    private var saving = false
+    private var saveTask: Task<Void,Never>?
+    var draft: EditorDraft? {
+        isDirty ? EditorDraft(text:text,baseline:savedText,sha256:fingerprint) : nil
+    }
+    func restoreDraft(_ draft: EditorDraft) {
+        invalidateReload(); content = .text
+        text=draft.text; savedText=draft.baseline; fingerprint=draft.sha256
+        refreshDirtyState(); reloadRevision &+= 1
+    }
     /// Mutable so a rename in the file tree can re-point the tab without
     /// tearing it down (the id — hence the editor and its state — is stable).
     @Published private(set) var path: String
@@ -63,13 +75,14 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
         let imageFingerprint: Int?
     }
 
-    init(path: String) {
-        self.path = path
-        let loaded = Self.load(path: path)
-        content = loaded.content
+    init(path: String, hostID: UUID = HostGroups.localID) {
+        self.path = path; self.hostID = hostID
+        let loaded = Self.loadedContent(path: path, data: nil)
+        content = .unavailable(String(localized:"Loading…"))
         text = loaded.text
         savedText = loaded.text
         imageFingerprint = loaded.imageFingerprint
+        reloadFromDiskIfClean()
     }
 
     var name: String {
@@ -95,6 +108,7 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
         } else {
             dirty = false
         }
+        if dirty { objectWillChange.send() }
         if isDirty != dirty {
             isDirty = dirty
             if dirty {
@@ -106,31 +120,39 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     func save() {
-        guard case .text = content, isDirty else { return }
-        invalidateReload()
-        do {
-            try text.write(toFile: path, atomically: true, encoding: .utf8)
-            savedText = text
-            isDirty = false
-            saveError = nil
-        } catch {
-            saveError = error.localizedDescription
+        guard case .text = content, isDirty, !saving else { return }
+        guard HostGroups.shared.isExpanded(hostID) else { saveError = "Host is disconnected. Your edits have been kept."; return }
+        invalidateReload(); saving = true
+        let service = HostGroups.shared.service(hostID), path = path, value = text, expected = fingerprint
+        saveTask = Task { [weak self] in
+            let result = await Task.detached { Result { try service.write(path,data:Data(value.utf8),expected:expected) } }.value
+            guard let self else { return }; self.saving = false
+            switch result {
+            case .success(let hash): self.fingerprint = hash; self.savedText = value; self.refreshDirtyState(); self.saveError = nil
+            case .failure(let error): self.saveError = error.localizedDescription
+            }
         }
     }
+    func saveAndWait() async -> Bool {
+        save(); await saveTask?.value
+        return !isDirty && saveError == nil
+    }
+
 
     /// Re-read a clean preview when it returns on screen. Disk I/O happens off
     /// the main actor; generation/path/dirty guards keep an older read from
     /// winning over a rename, save, or edit performed while it was in flight.
     func reloadFromDiskIfClean() {
-        guard !isDirty else { return }
+        guard !isDirty, !saving, HostGroups.shared.isExpanded(hostID) else { return }
         reloadTask?.cancel()
         reloadGeneration &+= 1
         let generation = reloadGeneration
         let expectedPath = path
+        let service = HostGroups.shared.service(hostID)
 
         reloadTask = Task { [weak self] in
-            let data = await Task.detached(priority: .userInitiated) {
-                Self.readData(path: expectedPath)
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try service.read(expectedPath) }
             }.value
             guard !Task.isCancelled,
                   let self,
@@ -139,7 +161,17 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
                   !self.isDirty
             else { return }
 
-            let loaded = Self.loadedContent(path: expectedPath, data: data)
+            let file: HostService.File
+            switch result {
+            case .success(let value): file=value
+            case .failure(let error):
+                self.saveError=error.localizedDescription
+                if self.fingerprint.isEmpty { self.content = .unavailable(error.localizedDescription); self.reloadRevision &+= 1 }
+                return
+            }
+            let data=file
+            self.fingerprint = data.sha256
+            let loaded = Self.loadedContent(path: expectedPath, data: data.data)
             guard !self.matches(loaded) else { return }
             self.content = loaded.content
             self.text = loaded.text

@@ -1,275 +1,142 @@
-//
-//  FileTreeModel.swift
-//  kero
-//
-
 import AppKit
 import Combine
-import Foundation
 
-/// Flattened, lazily-expanded view of a directory tree.
+/// Only visible directories are read. Each refresh captures a host capability;
+/// collapse cancels that capability, including its directory watch.
 @MainActor
 final class FileTreeModel: nonisolated ObservableObject {
-    struct Item: Identifiable, Equatable {
+    struct Item: Identifiable, Equatable, Sendable {
         var id: String { path }
         let name: String
         let path: String
         let isDirectory: Bool
         let depth: Int
-        /// True for the transient inline "new file/folder" input row, which
-        /// has no backing file yet.
         var isDraft = false
     }
-
-    /// A pending inline "new file/folder": an input row shown inside
-    /// `parentDir` until the user names it (Enter) or cancels (Escape/blur).
-    struct Draft: Equatable {
-        let parentDir: String
-        let isDirectory: Bool
-    }
-
+    struct Draft: Equatable { let parentDir: String; let isDirectory: Bool }
     @Published private(set) var rootPath = ""
     @Published private(set) var items: [Item] = []
-    /// Path of the row currently being renamed inline, if any.
     @Published private(set) var renamingPath: String?
-    /// The pending new-file/folder input row, if any.
     @Published private(set) var draft: Draft?
+    @Published private(set) var error: String?
+    private var hostID = HostGroups.localID
     private var expanded: Set<String> = []
-
-    var rootName: String {
-        (rootPath as NSString).lastPathComponent
-    }
-
-    func isExpanded(_ item: Item) -> Bool {
-        expanded.contains(item.path)
-    }
-
-    /// Points the tree at `root` (collapsing everything if it moved) and
-    /// re-reads visible directories. Cheap when nothing changed.
-    func sync(root: String) {
-        if root != rootPath {
-            rootPath = root
-            expanded = []
-            // Any in-progress inline edit belonged to the old tree.
-            renamingPath = nil
-            draft = nil
+    private var generation = 0
+    private var refreshTask: Task<Void,Never>?
+    private var watcher: HostService.Watch?
+    private var watchedPaths: Set<String> = []
+    private var serviceIdentity: ObjectIdentifier?
+    private var watchTask: Task<Void,Never>?
+    deinit { watcher?.cancel();watchTask?.cancel();refreshTask?.cancel() }
+    var onCreated: ((String)->Void)?
+    var onRenamed: ((String,String)->Void)?
+    var rootName: String { (rootPath as NSString).lastPathComponent }
+    func isExpanded(_ item:Item)->Bool { expanded.contains(item.path) }
+    func sync(root:String,hostID:UUID = HostGroups.localID) {
+        let identity = ObjectIdentifier(HostGroups.shared.service(hostID))
+        if root != rootPath || hostID != self.hostID || serviceIdentity != identity {
+            serviceIdentity = identity
+            generation += 1; refreshTask?.cancel(); refreshTask=nil
+            watcher?.cancel(); watcher=nil; watchedPaths=[]; watchTask?.cancel(); watchTask=nil
+            rootPath=root; self.hostID=hostID; expanded=[]; items=[]; draft=nil; renamingPath=nil
         }
+        guard !root.isEmpty,HostGroups.shared.isExpanded(hostID) else { items=[]; watcher?.cancel(); return }
         rebuild()
     }
-
-    func toggle(_ item: Item) {
-        guard item.isDirectory else { return }
-        if !expanded.insert(item.path).inserted {
-            expanded.remove(item.path)
-        }
-        rebuild()
+    func toggle(_ item:Item) { guard item.isDirectory else{return}; if !expanded.insert(item.path).inserted {expanded.remove(item.path)}; rebuild() }
+    func beginRename(_ item:Item){renamingPath=item.path}
+    func cancelRename(){renamingPath=nil}
+    func beginNewFile(in directory:String){draft=Draft(parentDir:directory,isDirectory:false)}
+    func beginNewFolder(in directory:String){draft=Draft(parentDir:directory,isDirectory:true)}
+    func cancelDraft(){draft=nil}
+    private func valid(_ name:String)->String? {
+        let name=name.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !name.isEmpty,!name.contains("/"),name != ".",name != ".." else{return nil};return name
     }
-
-    /// Moves `item` to the Trash, then rebuilds so it drops out of the tree.
-    func moveToTrash(_ item: Item) {
-        do {
-            try FileManager.default.trashItem(
-                at: URL(fileURLWithPath: item.path), resultingItemURL: nil
-            )
-            expanded.remove(item.path)
-        } catch {
-            presentError(
-                String(
-                    localized: "Couldn’t move “\(item.name)” to the Trash.",
-                    comment: "File operation error. The placeholder is a file or folder name."
-                ),
-                error.localizedDescription
-            )
-        }
-        rebuild()
+    @discardableResult func rename(_ item:Item,to name:String)->String? {
+        renamingPath=nil; guard let name=valid(name),name != item.name else{return nil}
+        let destination=((item.path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(name)
+        mutate("rename",path:item.path,fields:["destination":destination]) { [weak self] in
+            guard let self else{return}
+            self.expanded=Set(self.expanded.map{$0 == item.path ? destination : $0.hasPrefix(item.path+"/") ? destination+String($0.dropFirst(item.path.count)) : $0})
+            self.onRenamed?(item.path,destination)
+        }; return nil
     }
-
-    // MARK: - Rename
-
-    func beginRename(_ item: Item) {
-        renamingPath = item.path
+    @discardableResult func commitDraft(name:String)->String? {
+        guard let draft else{return nil};self.draft=nil
+        guard let name=valid(name) else{return nil}
+        let path=(draft.parentDir as NSString).appendingPathComponent(name)
+        mutate(draft.isDirectory ? "create_directory":"create_file",path:path) { [weak self] in
+            self?.expanded.insert(draft.parentDir); if !draft.isDirectory {self?.onCreated?(path)}
+        };return nil
     }
-
-    func cancelRename() {
-        renamingPath = nil
-    }
-
-    /// Renames `item` in place. No-ops on an empty or unchanged name; shows an
-    /// alert if the name collides or the filesystem move fails. Returns the new
-    /// absolute path when the file actually moved, so callers can follow it
-    /// (e.g. re-point open tabs).
-    @discardableResult
-    func rename(_ item: Item, to newName: String) -> String? {
-        renamingPath = nil
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != item.name else { return nil }
-        guard !trimmed.contains("/"), trimmed != ".", trimmed != ".." else {
-            presentError(
-                String(localized: "Couldn’t rename to “\(trimmed)”."),
-                String(localized: "A name can’t contain “/” or be “.” or “..”.")
-            )
-            return nil
-        }
-        let dir = (item.path as NSString).deletingLastPathComponent
-        let dest = (dir as NSString).appendingPathComponent(trimmed)
-        let fm = FileManager.default
-        // A case-only rename ("foo"→"Foo") maps to the same file on a
-        // case-insensitive volume, so don't treat that as a collision.
-        let caseOnlyChange = trimmed.lowercased() == item.name.lowercased()
-        guard caseOnlyChange || !fm.fileExists(atPath: dest) else {
-            presentError(
-                String(localized: "Couldn’t rename to “\(trimmed)”."),
-                String(localized: "An item named “\(trimmed)” already exists here.")
-            )
-            return nil
-        }
-        do {
-            try fm.moveItem(atPath: item.path, toPath: dest)
-            remapExpanded(from: item.path, to: dest)
-        } catch {
-            presentError(String(localized: "Couldn’t rename to “\(trimmed)”."), error.localizedDescription)
-            return nil
-        }
-        rebuild()
-        return dest
-    }
-
-    /// Keeps expansion state after a directory rename by rewriting the old
-    /// path prefix (for the folder itself and any expanded descendants).
-    private func remapExpanded(from oldPath: String, to newPath: String) {
-        guard expanded.contains(where: { $0 == oldPath || $0.hasPrefix(oldPath + "/") })
-        else { return }
-        expanded = Set(expanded.map { path in
-            if path == oldPath { return newPath }
-            if path.hasPrefix(oldPath + "/") {
-                return newPath + String(path.dropFirst(oldPath.count))
+    func moveToTrash(_ item:Item) {
+        if hostID == HostGroups.localID {
+            let generation = generation
+            Task { [weak self] in
+                let failure = await Task.detached { () -> String? in
+                    do { try FileManager.default.trashItem(at: URL(fileURLWithPath:item.path), resultingItemURL:nil); return nil }
+                    catch { return error.localizedDescription }
+                }.value
+                guard let self, self.generation == generation else { return }
+                if let failure { let alert=NSAlert(); alert.messageText="Could not move item to Trash"; alert.informativeText=failure; alert.runModal() }
+                self.rebuild()
             }
-            return path
-        })
-    }
-
-    // MARK: - Create (inline draft)
-
-    /// Opens an inline input row for a new file inside `directory`.
-    func beginNewFile(in directory: String) {
-        startDraft(in: directory, isDirectory: false)
-    }
-
-    /// Opens an inline input row for a new folder inside `directory`.
-    func beginNewFolder(in directory: String) {
-        startDraft(in: directory, isDirectory: true)
-    }
-
-    private func startDraft(in directory: String, isDirectory: Bool) {
-        renamingPath = nil
-        draft = Draft(parentDir: directory, isDirectory: isDirectory)
-        // Reveal the folder's contents so the input row is visible.
-        expanded.insert(directory)
-        rebuild()
-    }
-
-    func cancelDraft() {
-        guard draft != nil else { return }
-        draft = nil
-        rebuild()
-    }
-
-    /// Commits the pending draft, creating the file or folder. An empty name
-    /// cancels (matching VS Code). Returns the new file's path — for files
-    /// only — so the caller can open it.
-    @discardableResult
-    func commitDraft(name: String) -> String? {
-        guard let draft else { return nil }
-        self.draft = nil
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { rebuild(); return nil }
-        guard !trimmed.contains("/"), trimmed != ".", trimmed != ".." else {
-            presentError(
-                String(localized: "Couldn’t create “\(trimmed)”."),
-                String(localized: "A name can’t contain “/” or be “.” or “..”.")
-            )
-            rebuild()
-            return nil
+            return
         }
-        let dest = (draft.parentDir as NSString).appendingPathComponent(trimmed)
-        let fm = FileManager.default
-        guard !fm.fileExists(atPath: dest) else {
-            presentError(
-                String(localized: "Couldn’t create “\(trimmed)”."),
-                String(localized: "An item named “\(trimmed)” already exists here.")
-            )
-            rebuild()
-            return nil
-        }
-        var createdFile: String?
-        if draft.isDirectory {
-            do {
-                try fm.createDirectory(atPath: dest, withIntermediateDirectories: false)
-            } catch {
-                presentError(String(localized: "Couldn’t create the folder."), error.localizedDescription)
-            }
-        } else if fm.createFile(atPath: dest, contents: nil) {
-            createdFile = dest
-        } else {
-            presentError(
-                String(localized: "Couldn’t create the file."),
-                String(localized: "It could not be written to disk.")
-            )
-        }
-        rebuild()
-        return createdFile
+        // Remote machines need not have a desktop Trash service. Explicitly
+        // describe permanent deletion before issuing the single mutation.
+        let alert=NSAlert();alert.messageText="Delete “\(item.name)”?";alert.informativeText="This permanently removes the item on this host.";alert.addButton(withTitle:"Delete");alert.addButton(withTitle:"Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else{return}
+        mutate("remove",path:item.path,fields:["recursive":item.isDirectory]){}
     }
-
-    private func presentError(_ messageText: String, _ informativeText: String) {
-        let alert = NSAlert()
-        alert.messageText = messageText
-        alert.informativeText = informativeText
-        alert.alertStyle = .warning
-        alert.runModal()
+    private func mutate(_ action:String,path:String,fields:[String:Any]=[:],completion:@escaping()->Void) {
+        guard HostGroups.shared.isExpanded(hostID) else{return}
+        let service=HostGroups.shared.service(hostID), generation=generation
+        // Serialize JSON before crossing actor boundaries.
+        guard let data=try? JSONSerialization.data(withJSONObject:fields) else{return}
+        Task { [weak self] in
+            let failure=await Task.detached { ()->String? in
+                do { _=try service.request(action,path:path,fields:(try JSONSerialization.jsonObject(with:data)) as! [String:Any]);return nil }
+                catch{return error.localizedDescription}
+            }.value
+            guard let self,self.generation==generation else{return}
+            if let failure {self.error=failure;let alert=NSAlert();alert.messageText="File operation failed";alert.informativeText=failure;alert.runModal()}
+            else {completion()}; self.rebuild()
+        }
     }
-
+    func refresh() { rebuild() }
     private func rebuild() {
-        guard !rootPath.isEmpty else { return }
-        var out: [Item] = []
-        appendChildren(of: rootPath, depth: 0, into: &out)
-        if out != items {
-            items = out
+        guard !rootPath.isEmpty,refreshTask==nil,HostGroups.shared.isExpanded(hostID) else{return}
+        let service=HostGroups.shared.service(hostID),root=rootPath,expanded=expanded,generation=generation
+        let paths=expanded.union([root])
+        if paths != watchedPaths {
+            watchedPaths=paths;watcher?.cancel();let token=HostService.Watch();watcher=token
+            watchTask=Task.detached { [weak self] in
+                try? service.watch(Array(paths),token:token) {
+                    Task { @MainActor [weak self] in
+                        guard let self,self.generation==generation else{return};self.rebuild()
+                    }
+                }
+            }
         }
-    }
-
-    private func appendChildren(of dir: String, depth: Int, into out: inout [Item]) {
-        // Guard against runaway recursion through symlink cycles.
-        guard depth < 32 else { return }
-        // Show the inline new-file/folder input at the top of its folder.
-        if let draft, draft.parentDir == dir {
-            out.append(
-                Item(
-                    name: "", path: dir + "/\u{1}draft",
-                    isDirectory: draft.isDirectory, depth: depth, isDraft: true
-                )
-            )
-        }
-        let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: dir) else { return }
-
-        let children = names
-            .filter { $0 != ".git" }
-            .map { name -> Item in
-                let path = (dir as NSString).appendingPathComponent(name)
-                var isDir: ObjCBool = false
-                fm.fileExists(atPath: path, isDirectory: &isDir)
-                return Item(name: name, path: path, isDirectory: isDir.boolValue, depth: depth)
-            }
-            .sorted { a, b in
-                if a.isDirectory != b.isDirectory { return a.isDirectory }
-                return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
-
-        for child in children {
-            out.append(child)
-            if child.isDirectory, expanded.contains(child.path) {
-                appendChildren(of: child.path, depth: depth + 1, into: &out)
-            }
+        refreshTask=Task { [weak self] in
+            let result=await Task.detached { Result { ()throws->[Item] in
+                var result:[Item]=[]
+                func append(_ path:String,_ depth:Int)throws {
+                    guard depth<32,result.count<50_000 else{return}
+                    let entries=try service.directory(path).filter{$0.name != ".git"}.sorted { a,b in a.is_dir != b.is_dir ? a.is_dir : a.name.localizedStandardCompare(b.name) == .orderedAscending }
+                    for entry in entries {
+                        let child=(path as NSString).appendingPathComponent(entry.name)
+                        result.append(Item(name:entry.name,path:child,isDirectory:entry.is_dir,depth:depth))
+                        if entry.is_dir,expanded.contains(child){try append(child,depth+1)}
+                    }
+                }
+                try append(root,0);return result
+            }}.value
+            guard let self,self.generation==generation else{return};self.refreshTask=nil
+            switch result {case .success(let items):if self.items != items{self.items=items};self.error=nil
+            case .failure(let error):self.error=error.localizedDescription}
         }
     }
 }

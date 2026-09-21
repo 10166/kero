@@ -131,6 +131,7 @@ final class RemoteControlService: ObservableObject {
         sessionID: UUID,
         viewport: RemoteResize
     ) -> RemoteTerminalConnection? {
+        guard HostGroups.shared.isExpanded(hostID) else { return nil }
         let key = RemoteConnectionKey(hostID: hostID, sessionID: sessionID)
         if let existing = remoteConnections[key] {
             return existing
@@ -158,6 +159,11 @@ final class RemoteControlService: ObservableObject {
             send(payload, kind: .attach, to: host, streamID: connection.streamID)
         }
         return connection
+    }
+
+    func collapseHost(_ hostID: UUID) {
+        let connections = remoteConnections.values.filter { $0.hostID == hostID }
+        for connection in connections { release(connection); connection.disconnected() }
     }
 
     func release(_ connection: RemoteTerminalConnection) {

@@ -3,6 +3,7 @@
 //  kero
 //
 
+import AppKit
 import Combine
 import Darwin
 import Dispatch
@@ -26,6 +27,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         /// Canonical repo that produced this snapshot. Mutations reject stale
         /// rows after the active terminal moves to another repository.
         var repositoryRoot = ""
+        var hostID: UUID?
 
         var fileName: String { (path as NSString).lastPathComponent }
         var directory: String {
@@ -220,7 +222,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     }
 
     func isCurrent(_ entry: Entry) -> Bool {
-        entry.repositoryRoot.isEmpty || entry.repositoryRoot == repoRoot
+        (entry.hostID == nil || entry.hostID == hostID) && (entry.repositoryRoot.isEmpty || entry.repositoryRoot == repoRoot)
     }
 
     /// Returns a Git decoration only when `absolutePath` belongs to the
@@ -260,8 +262,12 @@ final class GitStatusModel: nonisolated ObservableObject {
             .max { $0.directoryPriority < $1.directoryPriority }
     }
 
-    func sync(root: String) {
-        if root != rootPath {
+    private(set) var hostID = HostGroups.localID
+    func sync(root: String, hostID: UUID = HostGroups.localID) {
+        if root != rootPath || hostID != self.hostID {
+            self.hostID = hostID
+            cachedStatusByRoot.removeAll()
+            invalidateStatusRefresh()
             contextGeneration &+= 1
             rootPath = root
             recentCommitLimit = recentCommitLimitByRoot[root]
@@ -280,7 +286,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         let root = rootPath
         let generation = contextGeneration
         let commitLimit = recentCommitLimit
-        guard !root.isEmpty else { return }
+        guard !root.isEmpty, HostGroups.shared.isExpanded(hostID) else { return }
         guard !isRefreshing, !isBusy else {
             refreshPending = true
             return
@@ -309,9 +315,12 @@ final class GitStatusModel: nonisolated ObservableObject {
             self.hasResolvedStatus = true
         }
 
+        let service = HostGroups.shared.service(hostID)
         Task { [weak self] in
             let result = await Task.detached(priority: .utility) {
+                HostService.$current.withValue(service) {
                 Self.runGitStatus(in: root, recentCommitLimit: commitLimit)
+                }
             }.value
             guard let self, self.contextGeneration == generation,
                   self.statusRequestID == requestID,
@@ -492,6 +501,56 @@ final class GitStatusModel: nonisolated ObservableObject {
                 )
             }
         }
+    }
+
+    /// Keep confirmation tied to this host, repository, and exact file bytes.
+    /// A disconnected capability cannot reconnect or repeat the mutation.
+    func confirmRemoteDiscard(_ entries: [Entry]) {
+        guard !isBusy, !entries.isEmpty, entries.allSatisfy(isCurrent) else { return }
+        let service = HostGroups.shared.service(hostID)
+        let root = repoRoot, host = hostID, branch = branch, head = headOID
+        let paths = Set(entries.flatMap { [$0.path] + ($0.origPath.map { [$0] } ?? []) })
+        Task { [weak self] in
+            do {
+                let before = try await Task.detached {
+                    try Self.remoteFingerprints(paths, root: root, service: service)
+                }.value
+                guard let self, self.hostID == host, self.repoRoot == root else { return }
+                let alert = NSAlert()
+                alert.messageText = "Discard changes on this host?"
+                alert.informativeText = "Tracked files will be restored. Untracked files will be permanently deleted."
+                alert.addButton(withTitle: "Discard Changes")
+                alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                let after = try await Task.detached {
+                    try Self.remoteFingerprints(paths, root: root, service: service)
+                }.value
+                guard before == after, self.hostID == host, self.repoRoot == root,
+                      self.branch == branch, self.headOID == head,
+                      entries.allSatisfy({ self.changedEntries.contains($0) }) else {
+                    self.cancelStaleDiscard(); return
+                }
+                self.discardChanges(entries)
+            } catch { self?.failImmediately(error.localizedDescription) }
+        }
+    }
+
+    nonisolated private static func remoteFingerprints(_ paths: Set<String>, root: String, service: HostService) throws -> [String:String] {
+        var result: [String:String] = [:]
+        for relative in paths {
+            let path = (root as NSString).appendingPathComponent(relative)
+            let parent = (path as NSString).deletingLastPathComponent
+            let name = (path as NSString).lastPathComponent
+            guard let entry = try service.directory(parent).first(where: { $0.name == name }) else {
+                result[relative] = "missing"; continue
+            }
+            // Do not pretend a directory or symlink has a regular-file hash.
+            guard !entry.is_dir, !entry.is_symlink else {
+                throw DaemonWire.Failure("Review directories and symbolic links in the terminal before discarding them.")
+            }
+            result[relative] = try service.read(path).sha256
+        }
+        return result
     }
 
     func cancelStaleDiscard() {
@@ -696,6 +755,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         requiresStableUpstream: Bool = false,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
+        guard HostGroups.shared.isExpanded(hostID) else { failImmediately("Host is disconnected", completion: completion); return }
         if directory == nil && !isRepo {
             failImmediately(
                 String(localized: "Repository changed; review the current directory and try the Git action again."),
@@ -726,8 +786,10 @@ final class GitStatusModel: nonisolated ObservableObject {
             finishedAt: nil
         )
 
+        let service = HostGroups.shared.service(hostID)
         Task { [weak self] in
             let batch = await Task.detached(priority: .userInitiated) {
+                HostService.$current.withValue(service) {
                 var transcript: [String] = []
                 var failureCode: Int32?
                 var failureMessage: String?
@@ -781,6 +843,7 @@ final class GitStatusModel: nonisolated ObservableObject {
                     failureCode: failureCode,
                     failureMessage: failureMessage
                 )
+                }
             }.value
 
             guard let self, self.runningOperationID == operationID else { return }
@@ -863,8 +926,10 @@ final class GitStatusModel: nonisolated ObservableObject {
             startedAt: Date(), finishedAt: nil
         )
 
+        let service = HostGroups.shared.service(hostID)
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
+                HostService.$current.withValue(service) {
                 guard Self.resolveRepositoryRoot(in: validationRoot) == expectedRepositoryRoot else {
                     return TrashResult(
                         moved: [],
@@ -888,9 +953,11 @@ final class GitStatusModel: nonisolated ObservableObject {
                 var failure: String?
                 for path in paths {
                     do {
-                        try FileManager.default.trashItem(
-                            at: base.appendingPathComponent(path), resultingItemURL: nil
-                        )
+                        if let service = HostService.current,service.hostID != HostGroups.localID {
+                            _ = try service.request("remove", path:base.appendingPathComponent(path).path,fields:["recursive":true])
+                        } else {
+                            try FileManager.default.trashItem(at:base.appendingPathComponent(path),resultingItemURL:nil)
+                        }
                         moved.append(path)
                     } catch {
                         failure = error.localizedDescription
@@ -898,6 +965,7 @@ final class GitStatusModel: nonisolated ObservableObject {
                     }
                 }
                 return TrashResult(moved: moved, failure: failure)
+                }
             }.value
 
             guard let self, self.runningOperationID == operationID else { return }
@@ -1078,6 +1146,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         let entries = result.entries.map { entry in
             var entry = entry
             entry.repositoryRoot = result.topLevel
+            entry.hostID = hostID
             return entry
         }
         fileDecorations = Dictionary(
@@ -1128,6 +1197,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     nonisolated static func runGit(
         _ args: [String], in dir: String, timeout: TimeInterval? = nil
     ) -> (status: Int32, stdout: String, stderr: String) {
+        if let service = HostService.current { return service.git(args, in: dir) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = args
@@ -1374,7 +1444,10 @@ final class GitStatusModel: nonisolated ObservableObject {
         var directory = URL(fileURLWithPath: root, isDirectory: true)
             .standardizedFileURL.path as NSString
         while true {
-            if fm.fileExists(atPath: directory.appendingPathComponent(".git")) {
+            let exists: Bool
+            if let service = HostService.current { exists = (try? service.directory(directory as String))?.contains{$0.name == ".git"} == true }
+            else { exists = fm.fileExists(atPath:directory.appendingPathComponent(".git")) }
+            if exists {
                 return true
             }
             let parent = directory.deletingLastPathComponent as NSString
@@ -1514,6 +1587,10 @@ final class GitStatusModel: nonisolated ObservableObject {
         at url: URL,
         maximumBytes: Int
     ) -> (lines: Int, bytesRead: Int) {
+        if let service = HostService.current {
+            guard let data = try? service.read(url.path).data, data.count <= maximumBytes, !data.contains(0) else { return (0,0) }
+            return (data.filter{$0 == 10}.count + (data.isEmpty || data.last == 10 ? 0 : 1),data.count)
+        }
         guard let values = try? url.resourceValues(
             forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
         ) else { return (0, 0) }
@@ -1626,8 +1703,10 @@ final class GitStatusModel: nonisolated ObservableObject {
     nonisolated static func detectRepositoryOperation(gitDirectory: String) -> String? {
         let fm = FileManager.default
         let git = URL(fileURLWithPath: gitDirectory, isDirectory: true)
+        let remoteEntries = HostService.current.flatMap { try? $0.directory(gitDirectory) }
         func exists(_ name: String) -> Bool {
-            fm.fileExists(atPath: git.appendingPathComponent(name).path)
+            if HostService.current != nil { return remoteEntries?.contains{$0.name == name} == true }
+            return fm.fileExists(atPath: git.appendingPathComponent(name).path)
         }
 
         if exists("rebase-merge") || exists("rebase-apply") {

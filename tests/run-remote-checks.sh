@@ -4,7 +4,7 @@ set -euo pipefail
 root="${0:A:h:h}"
 derived="${1:?usage: tests/run-remote-checks.sh /path/to/DerivedData}"
 products="${derived}/Build/Products/Debug"
-ghostty="${derived}/SourcePackages/artifacts/libghostty-spm/libghostty/GhosttyKit.xcframework/macos-arm64_arm64e_x86_64"
+ghostty="${root}/Vendor/libghostty-spm/BinaryTarget/GhosttyKit.xcframework/macos-arm64_x86_64"
 work="$(mktemp -d "${TMPDIR:-/tmp}/kero-remote-checks.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 cat "$root/kero/Remote/RemoteControlService.swift" "$root/tests/RemoteServiceChecks.swift" > "$work/RemoteControlService.swift"
@@ -19,4 +19,4 @@ swiftc -parse-as-library -I "$products" -I "$ghostty/Headers" -L "$ghostty" \
     "$products/GhosttyTerminal.o" "$products/GhosttyKit.o" "$products/MSDisplayLink.o" \
     -lghostty -lkero_alacritty -framework Carbon -framework AppKit -framework Metal -lc++ \
     -o "$work/remote-checks"
-"$work/remote-checks"
+KERO_CHECKPOINT_FIXTURE="$root/daemon/target/debug/examples/checkpoint_fixture" "$work/remote-checks"

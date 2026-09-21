@@ -29,7 +29,7 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     var ptyAdapter: AlacrittyPTYAdapter?
     var isRemotelyControlled = false
     var remoteOutput: ((Data) -> Void)?
-    var remoteConnection: RemoteTerminalConnection?
+    var remoteConnection: (any TerminalTransport)?
     var isRemoteRenderer = false
     /// The `/bin/sh -c …` line this surface launched, kept so a live
     /// re-configure can restate it rather than start a second shell.
@@ -61,12 +61,30 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
         start(launch: launch)
     }
 
-    convenience init(remoteConnection: RemoteTerminalConnection) {
+    convenience init(remoteConnection: any TerminalTransport) {
         self.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         start(remoteConnection: remoteConnection)
     }
 
     // MARK: - TerminalBackendSurface
+
+    override func paste(_ sender: Any?) {
+        if events?.terminalHandleImagePaste(.general) == true { return }
+        super.paste(sender)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 9, !event.modifierFlags.intersection([.command, .control]).isEmpty,
+           events?.terminalHandleImagePaste(.general) == true { return }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, event.keyCode == 9,
+           !event.modifierFlags.intersection([.command, .control]).isEmpty,
+           events?.terminalHandleImagePaste(.general) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func setSurfaceVisible(_ visible: Bool) {
         isSurfaceVisible = visible

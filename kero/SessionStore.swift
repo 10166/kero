@@ -6,11 +6,17 @@
 import Foundation
 
 /// Snapshot of open projects and tabs, saved so a relaunch restores the
-/// previous layout. Terminal sessions restore as fresh shells started in
-/// their last known working directory — with their previous scrollback
-/// replayed above the prompt when the "Restore session history" setting is on
-/// (see `historyKey` and `TerminalHistoryStore`); file and diff panes reload
-/// from disk.
+/// previous layout. Live daemon identities reattach the original processes;
+/// a replacement daemon starts fresh shells and restores bounded history.
+/// Legacy history keys remain readable for migration. Dirty file/diff drafts
+/// preserve their baseline so a later save still detects external changes.
+struct EditorDraft: Codable {
+    var text: String
+    var baseline: String
+    var sha256: String
+    var oldContent: String?
+}
+
 struct SessionSnapshot: Codable {
     struct ProjectSnapshot: Codable {
         /// A single pane's content — the terminal, file, browser, or diff it
@@ -38,6 +44,10 @@ struct SessionSnapshot: Codable {
             /// nil for files, browsers, diffs, or when history restore is off.
             /// Optional so snapshots written before this feature still decode.
             var historyKey: String?
+            var paneID: UUID?
+            var sessionID: UUID?
+            var daemonIdentity: DaemonSessionIdentity?
+            var editorDraft: EditorDraft?
         }
 
         struct ColumnSnapshot: Codable {
@@ -62,6 +72,7 @@ struct SessionSnapshot: Codable {
         /// position. Decodes both the former column/row format and the original
         /// pre-split single-content format.
         struct TabSnapshot: Codable {
+            var id: UUID?
             var layout: LayoutSnapshot
             var focusedPaneIndex: Int
             /// User-assigned tab name; nil when the title is automatic.
@@ -74,8 +85,9 @@ struct SessionSnapshot: Codable {
 
             init(
                 layout: LayoutSnapshot, focusedPaneIndex: Int,
-                customName: String? = nil, contextSessionIndex: Int? = nil
+                customName: String? = nil, contextSessionIndex: Int? = nil, id: UUID? = nil
             ) {
+                self.id = id
                 self.layout = layout
                 self.focusedPaneIndex = focusedPaneIndex
                 self.customName = customName
@@ -83,13 +95,15 @@ struct SessionSnapshot: Codable {
             }
 
             enum CodingKeys: String, CodingKey {
-                case layout, focusedPaneIndex, customName, contextSessionIndex
+                case id, layout, focusedPaneIndex, customName, contextSessionIndex
                 case columns, focusedColumn, focusedRow
             }
 
             init(from decoder: any Decoder) throws {
+                id = nil
                 if let container = try? decoder.container(keyedBy: CodingKeys.self),
                    container.contains(.layout) {
+                    id = try? container.decode(UUID.self, forKey: .id)
                     layout = try container.decode(LayoutSnapshot.self, forKey: .layout)
                     focusedPaneIndex =
                         (try? container.decode(Int.self, forKey: .focusedPaneIndex)) ?? 0
@@ -138,6 +152,7 @@ struct SessionSnapshot: Codable {
 
             func encode(to encoder: any Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(id, forKey: .id)
                 try container.encode(layout, forKey: .layout)
                 try container.encode(focusedPaneIndex, forKey: .focusedPaneIndex)
                 try container.encodeIfPresent(customName, forKey: .customName)
@@ -187,6 +202,8 @@ struct SessionSnapshot: Codable {
             }
         }
 
+        var id: UUID?
+        var hostID: UUID?
         var customName: String?
         /// User-pinned project directory; nil when the directory is
         /// automatic (the closest git repository, never persisted).

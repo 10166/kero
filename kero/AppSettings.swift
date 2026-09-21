@@ -103,10 +103,17 @@ final class AppSettings: nonisolated ObservableObject {
     /// `UserDefaults` (session snapshot, sidebar widths, Sparkle) apart.
     static let configURL: URL = {
         #if DEBUG
-        let directory = "kero-dev"
+        let defaultDirectory = "kero-dev"
         #else
-        let directory = "kero"
+        let defaultDirectory = "kero"
         #endif
+        // Separately signed acceptance builds must also isolate their TOML settings.
+        let override = Bundle.main.object(forInfoDictionaryKey: "KeroConfigurationNamespace") as? String
+        let directory = override.flatMap { value in
+            value.hasPrefix("kero-") && value.count <= 64
+                && value.utf8.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
+                ? value : nil
+        } ?? defaultDirectory
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/\(directory)/config.toml")
     }()

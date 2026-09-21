@@ -74,7 +74,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     private var hoveredURL: URLHit?
     private var isRemotelyControlled = false
     private var remoteOutput: ((Data) -> Void)?
-    private var remoteConnection: RemoteTerminalConnection?
+    private var remoteConnection: (any TerminalTransport)?
     private var isRemoteRenderer = false
     private var bootstrapRequest: CheckedContinuation<Data?, Never>?
     private var bootstrapTimeout: Task<Void, Never>?
@@ -160,7 +160,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         start(launch: launch)
     }
 
-    convenience init(remoteConnection: RemoteTerminalConnection) {
+    convenience init(remoteConnection: any TerminalTransport) {
         self.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         start(remoteConnection: remoteConnection)
     }
@@ -208,7 +208,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         }
     }
 
-    private func start(remoteConnection: RemoteTerminalConnection) {
+    private func start(remoteConnection: any TerminalTransport) {
         isRemoteRenderer = true
         self.remoteConnection = remoteConnection
         let size = gridSize(for: bounds.size)
@@ -242,7 +242,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         }
         remoteConnection.onData = { [weak self] data, bootstrap in
             guard let self, let handle = self.handle else { return }
-            if bootstrap { kero_alacritty_clear(handle) }
+            if bootstrap { kero_alacritty_reset_remote(handle) }
             data.withUnsafeBytes { bytes in
                 kero_alacritty_feed(
                     handle,
@@ -250,6 +250,10 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
                     bytes.count
                 )
             }
+            // A checkpoint replaces the entire emulator state. A parked or
+            // frozen view may already have consumed the reset's damage, so
+            // invalidate cached GPU rows even if no further PTY output arrives.
+            if bootstrap { scheduleRender(force: true) }
         }
     }
 
@@ -1366,7 +1370,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         remoteOutput = nil
         isRemotelyControlled = false
         remoteControlBanner.deactivate()
-        if let handle { kero_alacritty_set_protocol_writes(handle, true) }
+        if let handle { kero_alacritty_set_protocol_writes(handle, remoteConnection?.ownsProtocolResponses != true) }
         synchronizeGridSize()
         scheduleRender(force: true)
     }
@@ -1488,6 +1492,8 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 9, !event.modifierFlags.intersection([.command, .control]).isEmpty,
+           events?.terminalHandleImagePaste(.general) == true { return }
         if event.modifierFlags.contains(.command), let handle {
             switch Int(event.keyCode) {
             case 115: // Command-Home
@@ -1889,6 +1895,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
 
     @objc func paste(_ sender: Any?) {
         let pasteboard = NSPasteboard.general
+        if events?.terminalHandleImagePaste(pasteboard) == true { return }
         guard let text = Self.pasteboardString(from: pasteboard) else {
             // Image-aware TUIs read the native pasteboard after Ctrl-V. The
             // renderer may not display their image protocol, but the paste

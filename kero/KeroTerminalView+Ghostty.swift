@@ -60,7 +60,7 @@ extension KeroTerminalView {
         )
     }
 
-    func start(remoteConnection: RemoteTerminalConnection) {
+    func start(remoteConnection: any TerminalTransport) {
         isRemoteRenderer = true
         self.remoteConnection = remoteConnection
         let session = InMemoryTerminalSession(
@@ -93,9 +93,11 @@ extension KeroTerminalView {
         configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         self.controller = controller
         applyAppearance()
-        let outputFilter = RemoteOutputFilter()
-        remoteConnection.onData = { [weak session, outputFilter] data, bootstrap in
-            if bootstrap { session?.receive(Data("\u{1b}c".utf8)) }
+        var outputFilter = RemoteOutputFilter()
+        remoteConnection.onData = { [weak session] data, bootstrap in
+            if bootstrap { outputFilter = RemoteOutputFilter(); session?.receive(Data("\u{1b}c".utf8)) }
+            // Transport bytes stay original. Renderer-side filtering prevents
+            // remote Kitty file references from accessing this Mac's files.
             session?.receive(outputFilter.receive(data))
         }
     }
@@ -262,6 +264,7 @@ extension KeroTerminalView {
             // host-initiated and stay prompt-free (unless an unsafe paste
             // trips protection).
             builder.withCustom("clipboard-read", remote ? "deny" : "ask")
+            builder.withCustom("kero-renderer-only", remote ? "true" : "false")
             builder.withCustom("clipboard-write", remote ? "deny" : "allow")
             builder.withCustom("clipboard-paste-protection", remote ? "false" : "true")
         }

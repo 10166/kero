@@ -122,7 +122,7 @@ enum TerminalBackend: String, CaseIterable, Identifiable, Sendable {
 
     @MainActor
     func makeRemoteSurface(
-        connection: RemoteTerminalConnection
+        connection: any TerminalTransport
     ) -> any TerminalBackendSurface {
         switch self {
         case .libghostty:
@@ -143,7 +143,7 @@ struct TerminalBackendHighlight: Identifiable, Sendable {
 /// Everything a backend needs to start one pane's shell. Kero resolves the
 /// login shell, the PID/replay shim, and the environment once, up front; how a
 /// backend spawns a PTY from there is its own business.
-struct TerminalLaunch {
+nonisolated struct TerminalLaunch: Sendable {
     /// Program to exec, and the arguments after argv[0] — for backends that
     /// spawn the PTY themselves.
     let program: String
@@ -290,6 +290,7 @@ protocol TerminalBackendEvents: AnyObject {
     func terminalLinkTarget(for value: String) -> TerminalLinkTarget?
     func terminalDidScroll(_ position: TerminalScrollPosition)
     func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardRequest)
+    func terminalHandleImagePaste(_ pasteboard: NSPasteboard) -> Bool
 
     /// The backend started a find of its own accord — Kero's ⌘E path resolves
     /// the needle from the grid selection, so the bar learns it from here.
@@ -297,6 +298,10 @@ protocol TerminalBackendEvents: AnyObject {
     func terminalDidEndFind()
     func terminalDidUpdateFindTotal(_ total: Int?)
     func terminalDidUpdateFindSelected(_ selected: Int?)
+}
+
+extension TerminalBackendEvents {
+    func terminalHandleImagePaste(_ pasteboard: NSPasteboard) -> Bool { false }
 }
 
 /// A Command-clickable terminal value after the owning session has resolved

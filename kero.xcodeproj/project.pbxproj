@@ -95,6 +95,7 @@
 			buildConfigurationList = FF3FDD7E300B6A7600112486 /* Build configuration list for PBXNativeTarget "kero" */;
 			buildPhases = (
 				AA40000000000000000000A0 /* Build Alacritty bridge */,
+                AA40000000000000000000A1 /* Build daemon */,
 				FF3FDD6F300B6A7400112486 /* Sources */,
 				FF3FDD70300B6A7400112486 /* Frameworks */,
 				FF3FDD71300B6A7400112486 /* Resources */,
@@ -176,7 +177,9 @@
 		AA40000000000000000000A0 /* Build Alacritty bridge */ = {
 			isa = PBXShellScriptBuildPhase;
 			inputPaths = (
-				"$(SRCROOT)/Vendor/alacritty-bridge/Cargo.lock",
+				"$(SRCROOT)/Vendor/alacritty_terminal",
+                "$(SRCROOT)/Vendor/vte",
+                "$(SRCROOT)/Vendor/alacritty-bridge/Cargo.lock",
 				"$(SRCROOT)/Vendor/alacritty-bridge/Cargo.toml",
 				"$(SRCROOT)/Vendor/alacritty-bridge/src/graphics_event_loop.rs",
 				"$(SRCROOT)/Vendor/alacritty-bridge/src/kitty_graphics.rs",
@@ -194,6 +197,15 @@
 				"",
 			);
 		};
+        AA40000000000000000000A1 /* Build daemon */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            name = "Build daemon";
+            shellPath = /bin/zsh;
+            shellScript = "\"${SRCROOT}/scripts/build-bundled-daemon.sh\"";
+            inputPaths = ();
+            outputPaths = ("$(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/kero-daemon");
+        };
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */

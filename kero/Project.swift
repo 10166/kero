@@ -14,7 +14,11 @@ import Foundation
 /// `TerminalManager.close(_:)`) removes it from the manager.
 @MainActor
 final class Project: nonisolated ObservableObject, nonisolated Identifiable {
-    nonisolated let id = UUID()
+    nonisolated let id: UUID
+    nonisolated let hostID: UUID
+    private var remoteRootLookup: (String, ObjectIdentifier)?
+    private var remoteRoot: String?
+    private var remoteRootTask: Task<Void,Never>?
 
     /// User-assigned name; when nil the project title follows the
     /// selected session's terminal title.
@@ -53,7 +57,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     /// Pass `createInitialSession: false` when restoring a saved project;
     /// the caller then rebuilds the tabs itself.
-    init(fallbackName: String, createInitialSession: Bool = true) {
+    init(fallbackName: String, createInitialSession: Bool = true, id: UUID = UUID(), hostID: UUID = HostGroups.localID) {
+        self.id = id; self.hostID = hostID
         self.fallbackName = fallbackName
         if createInitialSession {
             newSession()
@@ -179,6 +184,27 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     func panelRoot(
         followingSessionAt cwd: String, foregroundAt foregroundCwd: String? = nil
     ) -> (root: String, source: PanelRootSource) {
+        guard HostGroups.shared.isExpanded(hostID) else { return ("", .shell) }
+        if hostID != HostGroups.localID {
+            if let customDirectory { return (customDirectory, .pinned) }
+            let path = cwd.isEmpty ? HostGroups.shared.connection(hostID)?.home ?? "" : cwd
+            let service = HostGroups.shared.service(hostID)
+            let identity = ObjectIdentifier(service)
+            if remoteRootLookup?.0 != path || remoteRootLookup?.1 != identity {
+                remoteRootLookup = (path,identity); remoteRoot = nil; remoteRootTask?.cancel()
+                remoteRootTask = Task { [weak self] in
+                    let root = await Task.detached { () -> String? in
+                        guard let response=try? service.request("repository",path:path),
+                              let value=response["path"] as? [String:Any] else { return nil }
+                        return value["path"] as? String
+                    }.value
+                    guard !Task.isCancelled, let self, self.remoteRootLookup?.0 == path,
+                          self.remoteRootLookup?.1 == identity else { return }
+                    self.remoteRoot=root; self.objectWillChange.send()
+                }
+            }
+            return (remoteRoot ?? path,.shell)
+        }
         if let pinned = customDirectory, FileManager.default.fileExists(atPath: pinned) {
             return (pinned, .pinned)
         }
@@ -255,7 +281,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         directory: String? = nil,
         restoredHistory: String? = nil,
         commandArguments: [String]? = nil,
-        environmentPath: String? = nil
+        environmentPath: String? = nil,
+        persistentID: UUID? = nil,
+        daemonIdentity: DaemonSessionIdentity? = nil
     ) -> TerminalSession {
         let session = TerminalSession(
             initialDirectory: directory
@@ -263,7 +291,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
                 ?? selectedSession?.currentDirectoryPath,
             restoredHistory: restoredHistory,
             commandArguments: commandArguments,
-            environmentPath: environmentPath
+            environmentPath: environmentPath,
+            persistentID: persistentID,
+            daemonIdentity: daemonIdentity,
+            hostID: hostID
         )
         session.onExited = { [weak self] session in
             // Already dead — just drop its pane, no second terminate.
@@ -275,10 +306,11 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         return session
     }
 
-    func terminateAll() {
+    func terminateAll() async -> Bool {
         for session in sessions {
-            session.terminate()
+            guard await session.terminate() else { return false }
         }
+        return true
     }
 
     // MARK: - Splits
@@ -361,7 +393,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         // Capture the current directory context *before* selection moves to the
         // new tab, so its panels track the tab the file was opened from.
         let context = selectedSession
-        let file = FileTab(path: path)
+        let file = FileTab(path: path, hostID: hostID)
         if let editorState {
             file.editorState = editorState
         }
@@ -386,7 +418,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             tab.focusedPaneID = existing.id
             return
         }
-        tab.split(Pane(content: .file(FileTab(path: path))), toward: .right)
+        tab.split(Pane(content: .file(FileTab(path: path, hostID: hostID))), toward: .right)
     }
 
     private func findFilePane(path: String) -> (tab: PaneTab, paneID: UUID)? {
@@ -488,6 +520,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         }
         let context = selectedSession
         let diff = DiffTab(
+            hostID: hostID,
             repoRoot: repoRoot, path: path, staged: staged,
             untracked: untracked, origPath: origPath
         )
@@ -518,6 +551,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         }
         let context = selectedSession
         let diff = DiffTab(
+            hostID: hostID,
             repoRoot: repoRoot,
             path: path,
             staged: false,
@@ -561,8 +595,12 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     func closeContent(_ content: PaneContent, terminate: Bool = true) {
         switch content {
         case .session(let session):
-            if terminate { session.terminate() }
-            removePaneWithContent(content.id)
+            if terminate {
+                guard session.isConnected else { HostGroups.shared.showDisconnectedClose(); return }
+                Task { [weak self] in
+                    if await session.terminate() { self?.removePaneWithContent(content.id) }
+                }
+            } else { removePaneWithContent(content.id) }
         case .file(let file):
             guard file.isDirty else {
                 removePaneWithContent(content.id)
@@ -637,7 +675,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// This is `async` on purpose: awaiting the sheet means each prompt in a
     /// batch is presented only after the previous one has fully dismissed.
     @discardableResult
-    private func confirmCloseUnsaved(_ content: PaneContent, in window: NSWindow?) async -> Bool {
+    private func confirmCloseUnsaved(_ content: PaneContent, in window: NSWindow?, removeOnSuccess: Bool = true) async -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = String(
@@ -661,17 +699,28 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
         switch response {
         case .alertFirstButtonReturn: // Save
-            content.save()
-            // Keep the pane open if the write failed; the error bar shows why.
-            guard content.saveError == nil else { return true }
-            removePaneWithContent(content.id)
+            let saved: Bool
+            switch content {
+            case .file(let file): saved = await file.saveAndWait()
+            case .diff(let diff): saved = await diff.saveAndWait()
+            default: saved = true
+            }
+            guard saved else { return true }
+            if removeOnSuccess { removePaneWithContent(content.id) }
             return false
         case .alertSecondButtonReturn: // Don't Save
-            removePaneWithContent(content.id)
+            if removeOnSuccess { removePaneWithContent(content.id) }
             return false
         default: // Cancel
             return true
         }
+    }
+
+    func prepareToClose() async -> Bool {
+        for content in tabs.flatMap({$0.allContents}) where content.isDirty {
+            if await confirmCloseUnsaved(content,in:NSApp.keyWindow,removeOnSuccess:false) { return false }
+        }
+        return true
     }
 
     /// Closes several pieces of content at once. Any unsaved files are
@@ -802,7 +851,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         let panes = layout.allPanes
         guard !panes.isEmpty else { return nil }
         let focusedIndex = min(max(0, snap.focusedPaneIndex), panes.count - 1)
-        let tab = PaneTab(layout: layout, focusedPaneID: panes[focusedIndex].id)
+        let tab = PaneTab(layout: layout, focusedPaneID: panes[focusedIndex].id, id: snap.id ?? UUID())
         tab.customName = snap.customName
         append(tab)
         return tab
@@ -815,9 +864,21 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         switch snap {
         case .pane(let pane):
             let restoredHistory = pane.historyKey.flatMap { histories[$0] }
-            return .pane(Pane(content: makeContent(
-                from: pane.content, restoredHistory: restoredHistory
-            )))
+            if case .session(let directory) = pane.content {
+                return .pane(Pane(id: pane.paneID ?? UUID(), content: .session(makeSession(
+                    directory: directory, restoredHistory: restoredHistory,
+                    persistentID: pane.sessionID, daemonIdentity: pane.daemonIdentity
+                ))))
+            }
+            let content = makeContent(from:pane.content,restoredHistory:restoredHistory)
+            if let draft = pane.editorDraft {
+                switch content {
+                case .file(let file): file.restoreDraft(draft)
+                case .diff(let diff): diff.restoreDraft(draft)
+                default: break
+                }
+            }
+            return .pane(Pane(id:pane.paneID ?? UUID(),content:content))
         case .split(let axis, let fraction, let first, let second):
             return .split(PaneSplit(
                 axis: axis,
@@ -836,13 +897,14 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         case .session(let workingDirectory):
             return .session(makeSession(directory: workingDirectory, restoredHistory: restoredHistory))
         case .file(let path, let editorState):
-            let file = FileTab(path: path)
+            let file = FileTab(path: path, hostID: hostID)
             if let editorState { file.editorState = editorState }
             return .file(file)
         case .browser(let url):
             return .browser(makeBrowser(initialURL: url, initialFocus: .none))
         case .diff(let repoRoot, let path, let staged, let untracked, let origPath):
             return .diff(DiffTab(
+            hostID: hostID,
                 repoRoot: repoRoot, path: path, staged: staged,
                 untracked: untracked, origPath: origPath
             ))
@@ -850,6 +912,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             let repoRoot, let path, let commitHash, let parentHash, let status, let origPath
         ):
             return .diff(DiffTab(
+            hostID: hostID,
                 repoRoot: repoRoot,
                 path: path,
                 staged: false,

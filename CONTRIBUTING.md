@@ -41,6 +41,43 @@ need an awake display to create their AppKit windows.
 Run `cargo test --manifest-path Vendor/alacritty-bridge/Cargo.toml` for the
 Alacritty bridge and `go test ./...` from `relay/` for the relay.
 
+## Headless daemon development
+
+Local and SSH terminals use [`kero-daemon`](daemon/README.md). Build its four
+checksum-manifested installer assets before a Release build. The daemon README
+also documents the pinned Ghostty source build required by both renderers.
+
+Run `cargo test --locked --manifest-path daemon/Cargo.toml` for process and
+filesystem checks, and add `-p kero-terminal-state` for parser/checkpoint tests.
+Build `--example checkpoint_fixture` before the remote renderer checks.
+`python3 tests/run-daemon-ssh-checks.py` uses an isolated localhost sshd, including
+a native jump-host connection, without changing Remote Login or user SSH keys.
+External SSH tests require an explicitly authorized target and matching asset.
+`tests/run-daemon-resource-checks.py --help` describes the opt-in Linux churn
+check: repeated native gateway connections, persistent shell identity, naturally
+exiting shells, watcher teardown, and `/proc` FD/thread/RSS samples. It uses a
+fresh private namespace and removes only its own daemon/state afterward.
+
+The host-group model checks use synthetic workspace wake notifications and
+mock connections; they do not replace actual sleep/wake or AppKit interaction:
+
+```bash
+xcrun swiftc -parse-as-library -framework AppKit -framework Combine \
+  kero/Hosts/HostGroups.swift tests/HostGroupsChecks.swift -o /tmp/KeroHostGroupsChecks
+/tmp/KeroHostGroupsChecks
+```
+
+Clipboard image checks use a private pasteboard and create a small PNG fixture
+for manual SSH/Agent testing; they do not modify the system clipboard:
+
+```bash
+xcrun swiftc -parse-as-library -framework AppKit -framework ImageIO \
+  -framework UniformTypeIdentifiers kero/Hosts/DaemonWire.swift \
+  kero/Hosts/RemoteImagePaste.swift tests/RemoteImagePasteChecks.swift \
+  -o /tmp/KeroRemoteImagePasteChecks
+/tmp/KeroRemoteImagePasteChecks
+```
+
 ## Website and docs
 
 The site is in [`web/`](web/README.md); user documentation is MDX under

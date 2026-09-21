@@ -245,8 +245,8 @@ final class TerminalManager: nonisolated ObservableObject {
     // MARK: - Projects
 
     @discardableResult
-    func newProject() -> Project {
-        let project = makeProject()
+    func newProject(hostID: UUID = HostGroups.localID) -> Project {
+        let project = makeProject(hostID: hostID)
         insert(project)
         return project
     }
@@ -316,8 +316,9 @@ final class TerminalManager: nonisolated ObservableObject {
         let directories = Self.takePendingDirectories()
         if !directories.isEmpty, let startupProjectID,
            let startupProject = projects.first(where: { $0.id == startupProjectID }) {
-            startupProject.terminateAll()
-            remove(startupProject)
+            Task { [weak self] in
+                if await startupProject.terminateAll() { self?.remove(startupProject) }
+            }
         }
         startupProjectID = nil
         for directory in directories {
@@ -391,11 +392,11 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
-    private func makeProject(createInitialSession: Bool = true) -> Project {
+    private func makeProject(createInitialSession: Bool = true, id: UUID = UUID(), hostID: UUID = HostGroups.localID) -> Project {
         projectCounter += 1
         let project = Project(
             fallbackName: "Project \(projectCounter)",
-            createInitialSession: createInitialSession
+            createInitialSession: createInitialSession, id: id, hostID: hostID
         )
         projectObservations[project.id] = project.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -404,8 +405,14 @@ final class TerminalManager: nonisolated ObservableObject {
     }
 
     func close(_ project: Project) {
-        project.terminateAll()
-        remove(project)
+        guard project.sessions.allSatisfy({ $0.hasExited || $0.isConnected }) else {
+            HostGroups.shared.showDisconnectedClose(); return
+        }
+        Task { [weak self,weak project] in
+            guard let self,let project,await project.prepareToClose() else{return}
+            guard project.sessions.allSatisfy({$0.hasExited || $0.isConnected}) else{HostGroups.shared.showDisconnectedClose();return}
+            if await project.terminateAll() { self.remove(project) }
+        }
     }
 
     private func remove(_ project: Project) {
@@ -883,37 +890,28 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
-    /// Called when this manager's window closes: drop it from the
-    /// persisted set — except for the last window, whose snapshot is kept
-    /// saved and queued so reopening (or relaunching) restores it — and
-    /// kill its shells.
+    /// Preserve closed windows for reopening and detach their subscriptions.
+    /// The daemon owns every shell independently of window lifetime.
     func windowClosed() {
         guard !Self.isQuitting else { return }
+        let window = makeWindowSnapshot(captureTerminalHistory: true)
+        Self.pendingRestores.append(window.snapshot)
+        Self.pendingHistories.merge(window.histories) { _, new in new }
         Self.registry.removeAll { $0 === self }
         if Self.registry.isEmpty {
-            // These shells are about to be destroyed, so this is their final
-            // capture even though the macOS app may remain open with no window.
-            let window = makeWindowSnapshot(captureTerminalHistory: true)
-            // Last window: keep its snapshot and scrollback saved and queued so
-            // reopening (or relaunching) restores them.
-            SessionStore.save([window.snapshot])
-            TerminalHistoryStore.save(window.histories)
-            Self.pendingRestores = [window.snapshot]
-            Self.pendingHistories = window.histories
-        } else {
-            Self.saveAll(captureTerminalHistory: false)
-        }
-        for project in projects {
-            project.terminateAll()
-        }
+            SessionStore.save(Self.pendingRestores)
+            TerminalHistoryStore.save(Self.pendingHistories)
+        } else { Self.saveAll(captureTerminalHistory: false) }
+        projects.flatMap(\.sessions).forEach { $0.detach() }
+        if Self.registry.isEmpty { HostGroups.shared.detachAll() }
     }
 
     // MARK: - Persistence
 
     private static func saveAll(captureTerminalHistory: Bool) {
         guard !registry.isEmpty else { return }
-        var snapshots: [SessionSnapshot] = []
-        var histories: [String: String] = [:]
+        var snapshots = pendingRestores
+        var histories = pendingHistories
         for manager in registry {
             let window = manager.makeWindowSnapshot(
                 captureTerminalHistory: captureTerminalHistory
@@ -952,10 +950,11 @@ final class TerminalManager: nonisolated ObservableObject {
                         customName: tab.customName,
                         contextSessionIndex: tab.contextSession.flatMap { context in
                             projectSessions.firstIndex { $0.id == context.id }
-                        }
+                        }, id: tab.id
                     )
                 }
                 return ProjectSnapshot(
+                    id: project.id, hostID: project.hostID,
                     customName: project.customName,
                     customDirectory: project.customDirectory,
                     tabs: tabs,
@@ -987,10 +986,20 @@ final class TerminalManager: nonisolated ObservableObject {
                 histories[key] = history
                 historyKey = key
             }
+            let draft: EditorDraft?
+            switch pane.content {
+            case .file(let file): draft=file.draft
+            case .diff(let diff): draft=diff.draft
+            default: draft=nil
+            }
             return .pane(ProjectSnapshot.PaneSnapshot(
                 content: contentSnapshot(pane.content),
                 weight: 1,
-                historyKey: historyKey
+                historyKey: historyKey,
+                paneID: pane.id,
+                sessionID: pane.content.session?.id,
+                daemonIdentity: pane.content.session?.daemonIdentity,
+                editorDraft: draft
             ))
         case .split(let split):
             return .split(
@@ -1046,7 +1055,7 @@ final class TerminalManager: nonisolated ObservableObject {
         if let visible = snapshot.isRightPanelVisible { isPanelVisible = visible }
         if let tab = snapshot.rightPanelTab { panelTab = tab }
         for saved in snapshot.projects where !saved.tabs.isEmpty {
-            let project = makeProject(createInitialSession: false)
+            let project = makeProject(createInitialSession: false, id: saved.id ?? UUID(), hostID: saved.hostID ?? HostGroups.localID)
             project.customName = Project.normalizedCustomName(saved.customName)
             project.customDirectory = saved.customDirectory
             var restoredContexts: [(tab: PaneTab, sessionIndex: Int)] = []

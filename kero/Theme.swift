@@ -198,6 +198,18 @@ enum Theme {
         selection.withLock { dark ? $0.dark : $0.light }
     }
 
+    nonisolated static func protocolColors(dark:Bool)->[String:[UInt8]] {
+        let theme=terminal(dark:dark)
+        var colors:[String:[UInt8]]=[:]
+        func rgb(_ value:String)->[UInt8]? {
+            guard let number=UInt32(value.replacingOccurrences(of:"#",with:""),radix:16) else{return nil}
+            return [UInt8((number>>16)&255),UInt8((number>>8)&255),UInt8(number&255)]
+        }
+        for (index,value) in theme.palette {colors[String(index)]=rgb(value)}
+        colors["256"]=rgb(theme.foreground);colors["257"]=rgb(theme.background);colors["258"]=rgb(theme.cursorColor ?? theme.foreground)
+        return colors
+    }
+
     /// Whether the selected theme for one appearance is a kero built-in
     /// Default theme, which keeps the sidebar's translucent material.
     nonisolated static func isDefault(dark: Bool) -> Bool {

@@ -24,6 +24,7 @@ struct RightSidebarView: View {
         manager.isPanelVisible
             && applicationIsActive
             && manager.panelTab != .git
+            && manager.selectedProject.map { HostGroups.shared.isExpanded($0.hostID) } == true
     }
 
     /// Every terminal in the selected project can change the same repository.
@@ -112,6 +113,7 @@ struct RightSidebarView: View {
                 )
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .keroHostGroupsChanged)) { _ in syncModels() }
         .onAppear { syncModels() }
         // Files and process information remain live while visible. Git is
         // event-driven: terminal/Git command completion and app activation
@@ -229,7 +231,7 @@ struct RightSidebarView: View {
         if rootSource != source { rootSource = source }
         switch manager.panelTab {
         case .files:
-            fileTree.sync(root: root)
+            fileTree.sync(root: root, hostID: project.hostID)
         case .git:
             break
         case .info:
@@ -305,50 +307,7 @@ private struct FileTreePanel: View {
     let refreshGitStatus: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                PanelHeader(title: model.rootName, subtitle: model.rootPath)
-                if let rootBadge {
-                    Text(verbatim: rootBadge.text)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.primary.opacity(0.09))
-                        )
-                        .accessibilityLabel(rootBadge.description)
-                }
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.rootPath)])
-                } label: {
-                    Image(systemName: "arrow.up.forward.app")
-                        .sidebarFont(size: 11)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Reveal in Finder")
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 8)
-
-            ScrollView {
-                LazyVStack(spacing: 1) {
-                    ForEach(model.items) { item in
-                        FileTreeRow(
-                            model: model, git: git, item: item, session: session,
-                            currentFilePath: currentFilePath,
-                            openFile: openFile, openToSide: openToSide, onRename: onRename,
-                            refreshGitStatus: refreshGitStatus
-                        )
-                    }
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
-            }
-        }
+        HostFileTreeRepresentable(model:model,openFile:openFile,openToSide:openToSide,onRename:onRename)
     }
 }
 
@@ -938,6 +897,7 @@ private struct GitPanel: View {
                 .disabled(model.totalChangeCount == 0)
             Button("Copy Repository Path") { copyToPasteboard(model.repoRoot) }
             Button("Reveal Repository in Finder") {
+                guard model.hostID == HostGroups.localID else{return}
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.repoRoot)])
             }
         } label: {
@@ -1564,8 +1524,12 @@ private struct GitPanel: View {
             openToSide: { openIfPossible(entry, toSide: true) },
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
-            discard: { pendingDiscard = makePendingDiscard(entry) },
+            discard: {
+                if model.hostID == HostGroups.localID { pendingDiscard = makePendingDiscard(entry) }
+                else { model.confirmRemoteDiscard([entry]) }
+            },
             absolutePath: model.absolutePath(for: entry),
+            isLocal: model.hostID == HostGroups.localID,
             copyRelativePath: { copyToPasteboard(entry.path) },
             insertInTerminal: session.map { session in
                 { session.sendCommand(shellQuoted(model.absolutePath(for: entry)) + " ") }
@@ -1576,7 +1540,7 @@ private struct GitPanel: View {
     private func openIfPossible(_ entry: GitStatusModel.Entry, toSide: Bool = false) {
         guard model.isCurrent(entry) else { return }
         let path = model.absolutePath(for: entry)
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard model.hostID != HostGroups.localID || FileManager.default.fileExists(atPath: path) else { return }
         if toSide {
             openToSide(path)
         } else {
@@ -1586,6 +1550,7 @@ private struct GitPanel: View {
 
     private func discardTitle(for entry: GitStatusModel.Entry?) -> String {
         guard let entry else { return "" }
+        if model.hostID != HostGroups.localID {return "Discard “\(entry.fileName)” on this host? Untracked files will be permanently deleted."}
         if entry.isUntracked {
             return String(
                 localized: "Delete \(entry.fileName)? Its contents will move to the Trash.",
@@ -1650,6 +1615,7 @@ private struct GitPanel: View {
     }
 
     private func fileFingerprint(at path: String) -> FileFingerprint {
+        precondition(model.hostID == HostGroups.localID)
         let fm = FileManager.default
         let linkDestination = try? fm.destinationOfSymbolicLink(atPath: path)
         guard linkDestination != nil || fm.fileExists(atPath: path) else {
@@ -1669,6 +1635,7 @@ private struct GitPanel: View {
     }
 
     private func requestDiscardAll() {
+        guard model.hostID == HostGroups.localID else { model.confirmRemoteDiscard(model.changedEntries); return }
         pendingDiscardAll = model.changedEntries.map(makePendingDiscard)
         confirmDiscardAll = !pendingDiscardAll.isEmpty
     }
@@ -1990,6 +1957,7 @@ private struct GitEntryRow: View {
     let unstage: () -> Void
     let discard: () -> Void
     let absolutePath: String
+    let isLocal: Bool
     let copyRelativePath: () -> Void
     let insertInTerminal: (() -> Void)?
 
@@ -2143,6 +2111,7 @@ private struct GitEntryRow: View {
         }
         Divider()
         Button("Reveal in Finder") {
+            guard isLocal else{return}
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
         }
         Button("Copy Path") {
@@ -2314,12 +2283,14 @@ private struct InfoPanel: View {
 
             HStack(spacing: 4) {
                 actionButton("Finder", systemImage: "arrow.up.forward.app") {
+                    guard session?.hostID == HostGroups.localID else{return}
                     NSWorkspace.shared.activateFileViewerSelecting(
                         [URL(fileURLWithPath: path)]
                     )
                 }
                 if let vsCode = Self.vsCodeURL {
                     actionButton("VS Code", systemImage: "chevron.left.forwardslash.chevron.right") {
+                        guard session?.hostID == HostGroups.localID else{return}
                         NSWorkspace.shared.open(
                             [URL(fileURLWithPath: path)],
                             withApplicationAt: vsCode,

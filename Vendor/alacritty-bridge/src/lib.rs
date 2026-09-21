@@ -1490,6 +1490,17 @@ pub unsafe extern "C" fn kero_alacritty_feed(
     terminal.event_proxy.emit(KERO_EVENT_WAKEUP, &[]);
 }
 
+/// Start a new authoritative checkpoint, discarding any old partial parser or
+/// graphics sequence. A clear-screen operation alone cannot reset parser state.
+#[no_mangle]
+pub unsafe extern "C" fn kero_alacritty_reset_remote(handle: *mut KeroTerminal) {
+    if handle.is_null() || (*handle).remote_parser.is_none() { return; }
+    (*handle).remote_parser = Some(RemoteParser::default());
+    kero_alacritty_clear(handle);
+    use alacritty_terminal::vte::ansi::Handler;
+    (*handle).term.lock().reset_state();
+}
+
 /// Enables or suppresses terminal-generated replies on a local PTY. A remote
 /// controller becomes the protocol authority while it owns input and resize.
 #[no_mangle]

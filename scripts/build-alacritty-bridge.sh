@@ -43,6 +43,12 @@ cp "${CRATE_DIR}/Cargo.toml" "${CRATE_DIR}/Cargo.lock" "${BUILD_DIR}/"
 rm -rf "${BUILD_DIR}/src"
 cp -R "${CRATE_DIR}/src" "${BUILD_DIR}/src"
 
+# Checkpoint support is a small, pinned fork shared with the headless daemon.
+for dependency in alacritty_terminal vte; do
+  mkdir -p "${WORK_DIR}/${dependency}"
+  rsync -a --delete "${SRCROOT}/Vendor/${dependency}/" "${WORK_DIR}/${dependency}/"
+done
+
 slices=()
 for arch in ${=ARCHS}; do
   case "${arch}" in

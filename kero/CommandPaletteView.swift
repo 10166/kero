@@ -153,18 +153,20 @@ struct CommandPaletteView: View {
         )
         .onExitCommand { handleEscapeFromKeyboard() }
         .onDisappear { manager.restoreFocusAfterCommandPalette() }
-        .task(id: fileIndexRoot) {
+        .task(id: fileIndexRoot.map { (manager.selectedProject?.hostID.uuidString ?? "") + ":" + $0 }) {
             projectFiles = []
             guard let root = fileIndexRoot else { return }
+            let hostID = manager.selectedProject?.hostID ?? HostGroups.localID
+            let service = HostGroups.shared.service(hostID)
             let indexingTask = Task.detached(priority: .userInitiated) {
-                Self.loadProjectFiles(in: root)
+                HostService.$current.withValue(service) { Self.loadProjectFiles(in: root) }
             }
             let files = await withTaskCancellationHandler {
                 await indexingTask.value
             } onCancel: {
                 indexingTask.cancel()
             }
-            guard !Task.isCancelled, root == fileIndexRoot else { return }
+            guard !Task.isCancelled, root == fileIndexRoot, manager.selectedProject?.hostID == hostID else { return }
             projectFiles = files
         }
     }
@@ -821,8 +823,7 @@ struct CommandPaletteView: View {
             guard !Task.isCancelled else { return nil }
             let absolutePath = (root as NSString).appendingPathComponent(relativePath)
             var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: absolutePath, isDirectory: &isDirectory),
-                  !isDirectory.boolValue
+            guard HostService.current != nil || (fileManager.fileExists(atPath: absolutePath, isDirectory: &isDirectory) && !isDirectory.boolValue)
             else { return nil }
             return ProjectFile(
                 name: (relativePath as NSString).lastPathComponent,
@@ -836,6 +837,19 @@ struct CommandPaletteView: View {
     }
 
     private nonisolated static func enumeratedProjectFiles(in root: String) -> [ProjectFile] {
+        if let service = HostService.current {
+            var files:[ProjectFile]=[]
+            func visit(_ directory:String,_ relative:String,_ depth:Int) {
+                guard !Task.isCancelled,depth<24,files.count<20_000,let entries=try? service.directory(directory) else{return}
+                for entry in entries where entry.name != ".git" {
+                    let path=(directory as NSString).appendingPathComponent(entry.name)
+                    let relativePath=relative.isEmpty ? entry.name:relative+"/"+entry.name
+                    if entry.is_dir {if !entry.is_symlink{visit(path,relativePath,depth+1)}}
+                    else {files.append(ProjectFile(name:entry.name,relativePath:relativePath,absolutePath:path))}
+                }
+            }
+            visit(root,"",0);return files
+        }
         let rootURL = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL
         let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey]
         let keySet = Set(keys)
