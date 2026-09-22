@@ -59,7 +59,7 @@ final class SessionConnectionView: NSView {
         case .failed(let message):
             label.stringValue =
                 String(localized: "Connection failed") + "\n" + message + "\n"
-                + String(localized: "Collapse and expand the host group to retry.")
+                + String(localized: "Retry the SSH host connection from the sidebar.")
         case .connected, .exited: label.stringValue = ""
         }
     }

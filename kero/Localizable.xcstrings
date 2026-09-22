@@ -6708,6 +6708,28 @@
         }
       }
     },
+    "The SSH gateway exited before connecting." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The SSH gateway exited before connecting."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH gateway は接続前に終了しました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH gateway 在连接前已退出。"
+          }
+        }
+      }
+    },
     "The selected Git remote is no longer available" : {
       "localizations" : {
         "ja" : {

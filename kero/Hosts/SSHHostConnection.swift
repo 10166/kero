@@ -2,14 +2,38 @@ import AppKit
 
 @MainActor
 final class SSHHostConnection {
+    /// Check executables substitute a tiny gateway for the bundled daemon. This
+    /// keeps stdout/termination behavior testable without opening a network
+    /// connection.
+    nonisolated(unsafe) static var gatewayExecutableOverride: URL?
     enum State: Equatable {
         case disconnected, connecting, installing, connected, reconnecting
         case failed(String)
+
+        var isFailed: Bool {
+            if case .failed = self { return true }
+            return false
+        }
     }
+    enum FailureStage: String {
+        case resolvingConfiguration = "resolving SSH configuration"
+        case startingGateway = "starting the SSH gateway"
+        case remote = "connecting to the remote host"
+        case closed = "connection closed"
+    }
+
+    struct FailureRecord: Equatable {
+        let occurredAt: Date
+        let stage: FailureStage
+        let message: String
+        let diagnostics: String?
+    }
+
     private(set) var state = State.disconnected
     private(set) var home = ""
     private(set) var shell = "/bin/sh"
     private(set) var socketPath: String?
+    private(set) var lastFailure: FailureRecord?
     private var process: Process?
     private var input: FileHandle?
     private var epoch = 0
@@ -17,40 +41,55 @@ final class SSHHostConnection {
     private var pending: [CheckedContinuation<String, Error>] = []
     private var prompt: NSAlert?
     private var configTask: Task<Void, Never>?
+    private var processWatchdog: Task<Void, Never>?
     private var triedSecrets = Set<String>()
     private var retryTask: Task<Void, Never>?
     private var failures = 0
     private var wasConnected = false
-    let definition: SSHHostDefinition
-    init(_ definition: SSHHostDefinition) { self.definition = definition }
-    func connect() {
-        guard HostGroups.shared.isExpanded(definition.id), state == .disconnected else { return }
+    private var notifyNextFailure = false
+    private var stderrBuffer: StandardErrorBuffer?
+    let hostID: UUID
+    init(hostID: UUID) { self.hostID = hostID }
+
+    func connect(notifyFailure: Bool) {
+        guard HostGroups.shared.isExpanded(hostID), state == .disconnected else { return }
+        guard let definition = HostGroups.shared.definition(hostID) else {
+            recordFailure(
+                "The saved SSH host configuration is missing.", stage: .resolvingConfiguration,
+                structured: true)
+            return
+        }
         epoch += 1
         let epoch = epoch
+        notifyNextFailure = notifyFailure
+        triedSecrets.removeAll()
         setState(wasConnected ? .reconnecting : .connecting)
-        let definition = definition
         configTask = Task { [weak self] in
             do {
-                let resolver = Task.detached {
-                    try JSONSerialization.data(
-                        withJSONObject: SSHConfiguration.resolve(
-                            destination: definition.destination,
-                            port: definition.port == 0 ? nil : definition.port))
-                }
-                let specData = try await withTaskCancellationHandler {
-                    try await resolver.value
-                } onCancel: {
-                    resolver.cancel()
-                }
+                // OpenSSH config parsing intentionally blocks on a child process.
+                // Running that on a detached Swift task can starve the
+                // cooperative pool when other daemon transports are blocked in
+                // socket reads; GCD owns this blocking work instead.
+                let specData = try await resolveSpecData(
+                    destination: definition.destination, port: definition.port)
                 guard let self, self.epoch == epoch, HostGroups.shared.isExpanded(definition.id) else {
                     return
                 }
-                try start(specData: specData, epoch: epoch)
-            } catch { self?.fail(error.localizedDescription, epoch: epoch) }
+                do { try self.start(specData: specData, epoch: epoch) }
+                catch {
+                    self.fail(
+                        error.localizedDescription, epoch: epoch, stage: .startingGateway,
+                        structured: true)
+                }
+            } catch {
+                self?.fail(
+                    error.localizedDescription, epoch: epoch, stage: .resolvingConfiguration,
+                    structured: true)
+            }
         }
     }
     func endpoint() async throws -> String {
-        guard HostGroups.shared.isExpanded(definition.id) else {
+        guard HostGroups.shared.isExpanded(hostID) else {
             throw DaemonWire.Failure("Host group is collapsed")
         }
         if state == .connected, let socketPath { return socketPath }
@@ -58,9 +97,10 @@ final class SSHHostConnection {
         return try await withCheckedThrowingContinuation { pending.append($0) }
     }
     private func start(specData: Data, epoch: Int) throws {
-        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "kero-daemon"),
+        guard let helper = Self.gatewayExecutableOverride
+            ?? Bundle.main.url(forAuxiliaryExecutable: "kero-daemon"),
             let resources = Bundle.main.resourceURL
-        else { throw DaemonWire.Failure("Bundled SSH daemon assets are missing") }
+        else { throw DaemonWire.Failure("Bundled SSH daemon assets are missing.") }
         let directory = URL(
             fileURLWithPath: "/tmp/kero-gateway-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -78,35 +118,66 @@ final class SSHHostConnection {
         let process = Process()
         let stdin = Pipe()
         let stdout = Pipe()
+        let stderr = Pipe()
         process.executableURL = helper
         process.arguments = ["--ssh-gateway"]
         process.standardInput = stdin
         process.standardOutput = stdout
-        process.standardError = FileHandle.nullDevice
+        process.standardError = stderr
+        let diagnostics = StandardErrorBuffer()
+        stderrBuffer = diagnostics
         let reader = GatewayLineReader { [weak self] data in
-            Task { @MainActor in self?.receive(data, epoch: epoch) }
+            Task { @MainActor [weak self] in self?.receive(data, epoch: epoch) }
         }
         stdout.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil } else { reader.read(data) }
         }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+            } else {
+                diagnostics.append(data)
+            }
+        }
         process.terminationHandler = { [weak self] _ in
             // Let stdout drain the structured failure even when exit arrives first.
+            // Also give stderr a short drain window; it is shown only as a
+            // technical tail when the gateway could not produce a reason.
             Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
                 guard let self, self.epoch == epoch else { return }
                 if case .failed = self.state { return }
-                self.fail("SSH connection closed", epoch: epoch)
+                self.fail(
+                    "SSH connection closed", epoch: epoch, stage: .closed, structured: false,
+                    diagnostics: diagnostics.tail())
             }
         }
         try process.run()
         self.process = process
+        // A gateway can exit before stdout's readability handler has drained
+        // the structured failure. Process exit is itself a terminal result, so
+        // an initial attempt must never remain stuck in “connecting”.
+        let startedProcess = process
+        processWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self, self.epoch == epoch, self.process === startedProcess,
+                !startedProcess.isRunning
+            else { return }
+            if case .failed = self.state { return }
+            self.fail(
+                String(localized: "The SSH gateway exited before connecting."),
+                epoch: epoch, stage: .startingGateway, structured: false,
+                diagnostics: diagnostics.tail())
+        }
         input = stdin.fileHandleForWriting
         var data = try JSONSerialization.data(withJSONObject: config)
         data.append(10)
         try input?.write(contentsOf: data)
     }
     private func receive(_ data: Data, epoch: Int) {
-        guard self.epoch == epoch, HostGroups.shared.isExpanded(definition.id),
+        guard self.epoch == epoch, HostGroups.shared.isExpanded(hostID),
             let value = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return }
         switch value["event"] as? String {
@@ -118,17 +189,22 @@ final class SSHHostConnection {
             guard let socketPath else { return }
             wasConnected = true
             failures = 0
-            HostGroups.shared.invalidateService(definition.id)
+            lastFailure = nil
+            notifyNextFailure = false
+            HostGroups.shared.invalidateService(hostID)
             setState(.connected)
             let waiting = pending
             pending = []
             waiting.forEach { $0.resume(returning: socketPath) }
             for manager in TerminalManager.automationManagers {
-                for project in manager.projects where project.hostID == definition.id {
+                for project in manager.projects where project.hostID == hostID {
                     project.sessions.forEach { $0.resume() }
                 }
             }
-        case "failed": fail(value["message"] as? String ?? "SSH failed", epoch: epoch)
+        case "failed":
+            fail(
+                value["message"] as? String ?? "SSH failed", epoch: epoch, stage: .remote,
+                structured: true)
         case "auth":
             if let id = value["request_id"] as? UInt64, let challenge = value["prompt"] as? [String: Any] {
                 authenticate(id: id, challenge: challenge, epoch: epoch)
@@ -140,17 +216,24 @@ final class SSHHostConnection {
         self.state = state
         HostGroups.shared.connectionChanged()
     }
-    private func fail(_ message: String, epoch: Int) {
+    private func fail(
+        _ message: String, epoch: Int, stage: FailureStage, structured: Bool,
+        diagnostics: String? = nil
+    ) {
         guard self.epoch == epoch else { return }
-        HostGroups.shared.invalidateService(definition.id)
+        HostGroups.shared.invalidateService(hostID)
+        processWatchdog?.cancel()
+        processWatchdog = nil
+        dismissPrompt()
         socketPath = nil
         setState(.failed(message))
+        recordFailure(message, stage: stage, structured: structured, diagnostics: diagnostics)
         let waiting = pending
         pending = []
         waiting.forEach { $0.resume(throwing: DaemonWire.Failure(message)) }
         // Authentication/configuration failures require an explicit retry.
         // Only a previously live connection retries transient link loss.
-        guard wasConnected, HostGroups.shared.isExpanded(definition.id), retryTask == nil else {
+        guard wasConnected, HostGroups.shared.isExpanded(hostID), retryTask == nil else {
             return
         }
         failures += 1
@@ -158,31 +241,68 @@ final class SSHHostConnection {
         retryTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, self.epoch == epoch,
-                HostGroups.shared.isExpanded(self.definition.id)
+                HostGroups.shared.isExpanded(self.hostID)
             else { return }
             self.close()
             self.wasConnected = true
-            self.connect()
+            self.connect(notifyFailure: false)
         }
+    }
+    private func recordFailure(
+        _ message: String, stage: FailureStage, structured: Bool, diagnostics: String? = nil
+    ) {
+        lastFailure = FailureRecord(
+            occurredAt: Date(), stage: stage, message: message,
+            diagnostics: structured ? nil : diagnostics)
+        if notifyNextFailure {
+            notifyNextFailure = false
+            presentFailure(message, stage: stage)
+        }
+    }
+    private func presentFailure(_ message: String, stage: FailureStage) {
+        let alert = NSAlert()
+        alert.messageText = String(localized: "SSH connection failed")
+        alert.informativeText =
+            "\(HostGroups.shared.definition(hostID)?.name ?? "SSH host")\n"
+            + String(localized: "Stage: \(stage.rawValue)") + "\n" + message
+        alert.addButton(withTitle: String(localized: "Show Details"))
+        alert.addButton(withTitle: String(localized: "Close"))
+        if let window = NSApp.keyWindow {
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard response == .alertFirstButtonReturn else { return }
+                self?.showDetails()
+            }
+        }
+    }
+    func showDetails() {
+        SSHConnectionDetailsSheet.present(hostID: hostID, on: NSApp.keyWindow)
+    }
+    func retry(notifyFailure: Bool) {
+        guard HostGroups.shared.isExpanded(hostID) else { return }
+        close()
+        connect(notifyFailure: notifyFailure)
     }
     func reconnectAfterWake() {
         let connectedBefore = wasConnected
         close()
         wasConnected = connectedBefore
-        connect()
+        connect(notifyFailure: false)
     }
     func close() {
-        HostGroups.shared.invalidateService(definition.id)
+        HostGroups.shared.invalidateService(hostID)
         epoch += 1
         retryTask?.cancel()
         retryTask = nil
         configTask?.cancel()
         configTask = nil
+        processWatchdog?.cancel()
+        processWatchdog = nil
         wasConnected = false
         if let prompt, let parent = prompt.window.sheetParent {
             parent.endSheet(prompt.window, returnCode: .abort)
         }
         prompt = nil
+        stderrBuffer = nil
         try? input?.close()
         input = nil
         socketPath = nil
@@ -201,7 +321,7 @@ final class SSHHostConnection {
         setState(.disconnected)
     }
     private func answer(_ id: UInt64, _ response: Any, epoch: Int) {
-        guard self.epoch == epoch, HostGroups.shared.isExpanded(definition.id) else { return }
+        guard self.epoch == epoch, HostGroups.shared.isExpanded(hostID) else { return }
         guard
             var data = try? JSONSerialization.data(withJSONObject: [
                 "request_id": id, "response": response,
@@ -215,6 +335,7 @@ final class SSHHostConnection {
             return
         }
         if kind == "Banner" { return }
+        let definition = HostGroups.shared.definition(hostID)
         let alert = NSAlert()
         prompt = alert
         if kind == "HostKeyUnknown" || kind == "HostKeyChanged" {
@@ -222,7 +343,9 @@ final class SSHHostConnection {
                 kind == "HostKeyChanged"
                 ? String(localized: "SSH host key changed") : String(localized: "Trust this SSH host?")
             alert.informativeText =
-                "\(details["host"] as? String ?? definition.destination)\n\(details["algorithm"] as? String ?? "")\n\(details["fingerprint_sha256"] as? String ?? "")"
+                "\(details["host"] as? String ?? definition?.destination ?? "")\n"
+                + "\(details["algorithm"] as? String ?? "")\n"
+                + (details["fingerprint_sha256"] as? String ?? "")
             if kind == "HostKeyChanged" {
                 alert.informativeText +=
                     "\n"
@@ -246,7 +369,7 @@ final class SSHHostConnection {
             return
         }
         let account =
-            "ssh-\(definition.id.uuidString)-\(kind)-\(details["key_path"] as? String ?? "password")"
+            "ssh-\(hostID.uuidString)-\(kind)-\(details["key_path"] as? String ?? "password")"
         if kind != "KeyboardInteractive", !triedSecrets.contains(account),
             let cached = RemoteKeychain.data(for: account),
             let secret = String(data: cached, encoding: .utf8)
@@ -259,7 +382,8 @@ final class SSHHostConnection {
             kind == "KeyPassphrase"
             ? String(localized: "SSH Key Passphrase") : String(localized: "SSH Authentication")
         alert.informativeText =
-            details["instructions"] as? String ?? details["key_path"] as? String ?? definition.destination
+            details["instructions"] as? String ?? details["key_path"] as? String
+            ?? definition?.destination ?? ""
         let prompts =
             (details["prompts"] as? [[String: Any]]) ?? [
                 ["text": String(localized: "Password"), "echo": false]
@@ -308,6 +432,31 @@ final class SSHHostConnection {
         }
     }
 }
+
+private func resolveSpecData(destination: String, port: UInt16?) async throws -> Data {
+    try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try continuation.resume(returning: JSONSerialization.data(
+                    withJSONObject: SSHConfiguration.resolve(
+                        destination: destination, port: port)))
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+}
+
+@MainActor
+private extension SSHHostConnection {
+    func dismissPrompt() {
+        if let prompt, let parent = prompt.window.sheetParent {
+            parent.endSheet(prompt.window, returnCode: .abort)
+        }
+        prompt = nil
+    }
+}
+
 nonisolated private final class GatewayLineReader: @unchecked Sendable {
     private var buffer = Data()
     private let lock = NSLock()
@@ -323,5 +472,26 @@ nonisolated private final class GatewayLineReader: @unchecked Sendable {
             buffer.removeSubrange(...newline)
             receive(line)
         }
+    }
+}
+
+nonisolated private final class StandardErrorBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private let limit = 16 * 1024
+
+    func append(_ input: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(input)
+        if data.count > limit {
+            data.removeFirst(data.count - limit)
+        }
+    }
+
+    func tail() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
     }
 }
