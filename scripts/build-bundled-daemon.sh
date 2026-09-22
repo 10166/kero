@@ -19,6 +19,14 @@ done
 mkdir -p "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
 lipo -create "${binaries[@]}" -output "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/kero-daemon"
 
+# The app signing phase sees this copied helper as nested code and fails when
+# the Rust build phase leaves it unsigned.
+if [[ "${CODE_SIGNING_ALLOWED:-YES}" == YES ]]; then
+    codesign --force --sign "${CODE_SIGN_IDENTITY:--}" --options runtime \
+        --timestamp=none --generate-entitlement-der \
+        "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/kero-daemon"
+fi
+
 if [[ "$CONFIGURATION" == Release ]]; then
     python3 - "$SRCROOT/build/daemon" <<'PYASSETS'
 import hashlib,json,pathlib,sys

@@ -431,6 +431,18 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
+    /// Host deletion drops every project on that host after the host has been
+    /// collapsed. Unlike `close(_:)`, it cannot offer to reconnect a detached
+    /// live shell; the confirmation UI has already told the user that remote
+    /// sessions remain owned by the daemon.
+    func removeHostProjects(_ hostID: UUID) {
+        // `remove(_:)` mutates `projects`; repeatedly selecting the next match
+        // avoids the array iterator skipping projects after a removal.
+        while let project = projects.first(where: { $0.hostID == hostID }) {
+            remove(project)
+        }
+    }
+
     /// Moves a dragged project across `targetID`: after it when moving down,
     /// or before it when moving up. Selection continues to follow its project ID.
     func moveProject(_ draggedID: UUID, to targetID: UUID) {

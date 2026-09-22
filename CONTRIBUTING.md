@@ -63,8 +63,20 @@ mock connections; they do not replace actual sleep/wake or AppKit interaction:
 
 ```bash
 xcrun swiftc -parse-as-library -framework AppKit -framework Combine \
-  kero/Hosts/HostGroups.swift tests/HostGroupsChecks.swift -o /tmp/KeroHostGroupsChecks
+  kero/Hosts/HostGroups.swift kero/Hosts/HostStore.swift \
+  tests/HostGroupsChecks.swift -o /tmp/KeroHostGroupsChecks
 /tmp/KeroHostGroupsChecks
+```
+
+SSH connection failure and retry checks exercise the real connection state
+machine until its bundled helper is intentionally unavailable:
+
+```bash
+xcrun swiftc -parse-as-library -framework AppKit -framework Combine \
+  kero/Hosts/SSHHostConnection.swift kero/Hosts/SSHConnectionDetailsSheet.swift \
+  kero/Hosts/HostGroups.swift kero/Hosts/HostStore.swift kero/Hosts/SSHConfiguration.swift \
+  tests/SSHConnectionChecks.swift -o /tmp/KeroSSHConnectionChecks
+/tmp/KeroSSHConnectionChecks
 ```
 
 Clipboard image checks use a private pasteboard and create a small PNG fixture
