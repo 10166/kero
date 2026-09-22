@@ -14,6 +14,10 @@ Write release notes for the final product users receive, not the development
 history. When a feature is still unreleased, fold its fixes and refinements into
 the original feature bullet instead of adding separate entries for them.
 
+## [0.1.49]
+
+- Run local and SSH terminal sessions in a bundled daemon so shells survive disconnects, app restarts, and daemon restarts; Kero becomes the renderer and client while the daemon preserves terminal state and serves files, Git, and remote services
+
 ## [0.1.48]
 
 - Control terminal sessions from another Kero through a self-hosted, Google-authenticated relay, with end-to-end encrypted byte-transparent I/O, mirrored projects/tabs/splits, exclusive control, device revocation, and immediate local take-back
