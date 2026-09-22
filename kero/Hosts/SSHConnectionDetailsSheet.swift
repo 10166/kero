@@ -4,13 +4,11 @@ import Combine
 @MainActor
 enum SSHConnectionDetailsSheet {
     static func present(hostID: UUID, on window: NSWindow?) {
-        guard let window, window.attachedSheet == nil else { return }
-        let sheet = NSWindow(
-            contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
-        sheet.title = String(localized: "SSH Connection Details")
         let controller = SSHConnectionDetailsController(hostID: hostID)
-        sheet.contentViewController = controller
-        window.beginSheet(sheet)
+        SheetPresenter.shared.present(
+            controller,
+            title: String(localized: "SSH Connection Details"),
+            on: window)
     }
 }
 
@@ -154,12 +152,18 @@ final class SSHConnectionDetailsController: NSViewController {
     }
 
     @objc private func retry() {
-        guard let sheet = view.window, let parent = sheet.sheetParent else { return }
-        parent.endSheet(sheet)
-        if HostGroups.shared.isExpanded(hostID), let connection = HostGroups.shared.connection(hostID) {
-            connection.retry(notifyFailure: true)
-        } else {
-            HostGroups.shared.setExpanded(hostID, true, userInitiated: true)
+        guard let sheet = view.window else { return }
+        // Retry only after the sheet completion has run. Starting another modal
+        // during dismissal can attach it to the sheet that is going away.
+        SheetPresenter.shared.dismiss(sheet) { [weak self] in
+            guard let self else { return }
+            if HostGroups.shared.isExpanded(self.hostID),
+                let connection = HostGroups.shared.connection(hostID)
+            {
+                connection.retry(notifyFailure: true)
+            } else {
+                HostGroups.shared.setExpanded(self.hostID, true, userInitiated: true)
+            }
         }
     }
 }

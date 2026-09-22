@@ -64,6 +64,7 @@ mock connections; they do not replace actual sleep/wake or AppKit interaction:
 ```bash
 xcrun swiftc -parse-as-library -framework AppKit -framework Combine \
   kero/Hosts/HostGroups.swift kero/Hosts/HostStore.swift \
+  kero/Hosts/SheetPresenter.swift \
   tests/HostGroupsChecks.swift -o /tmp/KeroHostGroupsChecks
 /tmp/KeroHostGroupsChecks
 ```
@@ -75,6 +76,7 @@ machine until its bundled helper is intentionally unavailable:
 xcrun swiftc -parse-as-library -framework AppKit -framework Combine \
   kero/Hosts/SSHHostConnection.swift kero/Hosts/SSHConnectionDetailsSheet.swift \
   kero/Hosts/HostGroups.swift kero/Hosts/HostStore.swift kero/Hosts/SSHConfiguration.swift \
+  kero/Hosts/SheetPresenter.swift \
   tests/SSHConnectionChecks.swift -o /tmp/KeroSSHConnectionChecks
 /tmp/KeroSSHConnectionChecks
 ```

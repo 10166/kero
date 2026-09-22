@@ -267,11 +267,9 @@ final class SSHHostConnection {
             + String(localized: "Stage: \(stage.rawValue)") + "\n" + message
         alert.addButton(withTitle: String(localized: "Show Details"))
         alert.addButton(withTitle: String(localized: "Close"))
-        if let window = NSApp.keyWindow {
-            alert.beginSheetModal(for: window) { [weak self] response in
-                guard response == .alertFirstButtonReturn else { return }
-                self?.showDetails()
-            }
+        SheetPresenter.shared.present(alert, on: NSApp.keyWindow) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.showDetails()
         }
     }
     func showDetails() {
