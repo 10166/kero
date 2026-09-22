@@ -21,6 +21,7 @@ pub use session::{ChannelCmd, SharedConnection, SshConnection, SshSessionHandle}
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
@@ -57,6 +58,10 @@ impl ConnectionKey {
             SshProxy::Command(c) => s.push_str(&format!("|cmd:{c}")),
             SshProxy::Socks { host, port } => s.push_str(&format!("|socks:{host}:{port}")),
             SshProxy::Http { host, port } => s.push_str(&format!("|http:{host}:{port}")),
+        }
+        if !spec.known_hosts_files.is_empty() {
+            s.push_str("|kh:");
+            s.push_str(&spec.known_hosts_files.join(","));
         }
         if let Some(jump) = &spec.jump {
             s.push_str("|jump:");
@@ -563,6 +568,7 @@ impl SshManager {
             let handler = ClientHandler {
                 host: spec.host.clone(),
                 port: spec.port,
+                known_hosts_files: spec.known_hosts_files.iter().map(PathBuf::from).collect(),
                 verify_host_keys: spec.verify_host_keys,
                 skip_banner: spec.skip_banner,
                 broker: broker.clone(),

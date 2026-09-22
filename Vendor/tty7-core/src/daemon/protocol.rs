@@ -563,6 +563,11 @@ pub struct NativeSshSpec {
     pub auth_mode: SshAuthMode,
     #[serde(default)]
     pub identity_files: Vec<String>,
+    /// Empty means Kero's usual user known_hosts files. OpenSSH puts multiple
+    /// space-separated paths in this option; the GUI resolves them before the
+    /// spec crosses the daemon boundary.
+    #[serde(default)]
+    pub known_hosts_files: Vec<String>,
     #[serde(default)]
     pub agent_forward: bool,
 
@@ -660,6 +665,7 @@ impl std::fmt::Debug for NativeSshSpec {
             .field("user", &self.user)
             .field("auth_mode", &self.auth_mode)
             .field("identity_files", &self.identity_files)
+            .field("known_hosts_files", &self.known_hosts_files)
             .field("agent_forward", &self.agent_forward)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field(
@@ -2338,6 +2344,7 @@ mod tests {
             user: "deploy".into(),
             auth_mode: SshAuthMode::Auto,
             identity_files: vec!["~/.ssh/id_ed25519".into()],
+            known_hosts_files: vec![],
             agent_forward: true,
             password: Some("hunter2".into()),
             key_passphrases: Some(passphrases),
@@ -2351,6 +2358,7 @@ mod tests {
                 user: "jump".into(),
                 auth_mode: SshAuthMode::Agent,
                 identity_files: vec![],
+                known_hosts_files: vec![],
                 agent_forward: false,
                 password: Some("jumppass".into()),
                 key_passphrases: None,

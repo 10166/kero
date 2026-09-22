@@ -395,7 +395,12 @@ where
 pub fn build_config(spec: &NativeSshSpec) -> Arc<russh::client::Config> {
     // Every hop comes through here — the target and each jump host build their
     // own config from their own spec — so each asks known_hosts about itself.
-    let known = known_hosts::known_algorithms(&spec.host, spec.port);
+    let known_hosts_files: Vec<std::path::PathBuf> = spec
+        .known_hosts_files
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    let known = known_hosts::known_algorithms_paths(&known_hosts_files, &spec.host, spec.port);
     let mut cfg = russh::client::Config {
         preferred: build_preferred(&spec.algorithms, &known),
         ..Default::default()

@@ -81,6 +81,15 @@ xcrun swiftc -parse-as-library -framework AppKit -framework Combine \
 /tmp/KeroSSHConnectionChecks
 ```
 
+SSH configuration checks resolve a disposable `ssh_config` fixture; they do
+not read or change the user's `~/.ssh/config`:
+
+```bash
+xcrun swiftc kero/Hosts/SSHConfiguration.swift \
+  tests/SSHConfigurationChecks.swift -o /tmp/KeroSSHConfigurationChecks
+/tmp/KeroSSHConfigurationChecks
+```
+
 For an ad-hoc/self-signed preview DMG, use the packaging script. It deep-signs
 the app after the build so bundled frameworks and the Rust daemon helper are
 sealed, then verifies both the app and DMG with strict, deep checks:
