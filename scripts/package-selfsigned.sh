@@ -71,11 +71,17 @@ if [[ "$identity" != "-" ]]; then
 fi
 
 codesign --force --deep --sign "$identity" \
-    --options runtime \
     --entitlements kero/kero.entitlements \
     "${timestamp_args[@]}" \
     --generate-entitlement-der \
     "$app"
+
+# Self-signed previews deliberately omit hardened runtime. Developer ID
+# distribution gets it from the normal release export instead.
+if codesign -dv "$app" 2>&1 | grep -q 'flags=.*runtime'; then
+    print -u2 'main executable unexpectedly has the hardened runtime flag'
+    exit 1
+fi
 
 # Keep this deep too: a shallow verify can pass even when nested code is stale
 # or unsigned.
