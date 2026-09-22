@@ -300,7 +300,7 @@ final class HostGroups: ObservableObject {
                 "Expand the host group to connect, then close the terminal. Its shell is still running on the host."
         )
         alert.addButton(withTitle: String(localized: "OK"))
-        if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        SheetPresenter.shared.present(alert, on: NSApp.keyWindow)
     }
 }
 extension Notification.Name {

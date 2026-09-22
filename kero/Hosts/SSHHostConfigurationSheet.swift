@@ -5,14 +5,11 @@ enum SSHHostConfigurationSheet {
     static let connectResponse = NSApplication.ModalResponse(9001)
 
     static func present(on window: NSWindow?, edit hostID: UUID? = nil) {
-        guard let window, window.attachedSheet == nil else { return }
-        let sheet = NSWindow(
-            contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
-        sheet.title = hostID == nil
+        guard window != nil else { return }
+        let title = hostID == nil
             ? String(localized: "Add SSH Host") : String(localized: "Edit SSH Host")
         let controller = SSHHostConfigurationController(hostID: hostID)
-        sheet.contentViewController = controller
-        window.beginSheet(sheet) { response in
+        SheetPresenter.shared.present(controller, title: title, on: window) { response in
             guard response == connectResponse, let id = controller.connectAfterClose else { return }
             HostGroups.shared.connectHost(id, userInitiated: true)
         }
