@@ -20,16 +20,38 @@ nonisolated enum SSHConfiguration {
         }
         return result
     }()
+    private static func expandPath(_ raw: String, host: String, user: String) -> String {
+        var path = raw
+        if path.hasPrefix("~") {
+            path = NSHomeDirectory() + path.dropFirst()
+        }
+        // OpenSSH token expansion keeps UserKnownHostsFile useful for
+        // per-host fixture files without forcing users to copy absolute paths
+        // into every Host block.
+        path = path
+            .replacingOccurrences(of: "%%", with: "\u{0}")
+            .replacingOccurrences(of: "%d", with: NSHomeDirectory())
+            .replacingOccurrences(of: "%h", with: host)
+            .replacingOccurrences(of: "%r", with: user)
+            .replacingOccurrences(of: "%u", with: NSUserName())
+            .replacingOccurrences(of: "\u{0}", with: "%")
+        return path
+    }
     /// OpenSSH resolves its own config syntax (Include, Host and Match). Only
     /// configuration is read; all network I/O uses Kero's native Rust engine.
-    static func resolve(destination: String, port: UInt16?, depth: Int = 0) throws -> [String: Any] {
+    static func resolve(
+        destination: String, port: UInt16?, configPath: String? = nil, depth: Int = 0
+    ) throws -> [String: Any] {
         guard depth < 8, !destination.isEmpty, !destination.hasPrefix("-") else {
             throw DaemonWire.Failure("Invalid SSH destination or jump chain")
         }
         let process = Process()
         let out = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = ["-G"] + (port.map { ["-p", String($0)] } ?? []) + [destination]
+        process.arguments = ["-G"]
+            + (configPath.map { ["-F", $0] } ?? [])
+            + (port.map { ["-p", String($0)] } ?? [])
+            + [destination]
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
@@ -93,22 +115,24 @@ nonisolated enum SSHConfiguration {
         if let alias = value("hostkeyalias"), alias != "none" {
             throw DaemonWire.Failure("HostKeyAlias is not supported")
         }
+        let host = value("hostname") ?? destination
+        let user = value("user") ?? NSUserName()
+        var knownHostsFiles: [String] = []
         if let paths = value("userknownhostsfile") {
+            if paths == "none" || paths.isEmpty {
+                throw DaemonWire.Failure("UserKnownHostsFile none is not supported")
+            }
             let files = paths.split(separator: " ").map {
-                ($0.description as NSString).expandingTildeInPath
+                expandPath(String($0), host: host, user: user)
             }
-            let supported = [
-                NSHomeDirectory() + "/.ssh/known_hosts", NSHomeDirectory() + "/.ssh/known_hosts2",
-            ]
-            if files.contains(where: { !supported.contains($0) }) {
-                throw DaemonWire.Failure("Custom UserKnownHostsFile is not supported")
+            guard files.allSatisfy({ $0.hasPrefix("/") }) else {
+                throw DaemonWire.Failure("UserKnownHostsFile paths must be absolute")
             }
+            knownHostsFiles = files
         }
         for flag in ["forwardx11", "gssapiauthentication", "batchmode"] where value(flag) == "yes" {
             throw DaemonWire.Failure("SSH option \(flag) is not supported")
         }
-        let host = value("hostname") ?? destination
-        let user = value("user") ?? NSUserName()
         let identities = (fields["identityfile"] ?? []).filter { $0 != "none" }.map {
             ($0 as NSString).expandingTildeInPath.replacingOccurrences(of: "%h", with: host)
                 .replacingOccurrences(of: "%r", with: user).replacingOccurrences(
@@ -123,6 +147,7 @@ nonisolated enum SSHConfiguration {
             "keepalive_count_max": UInt32(value("serveralivecountmax") ?? "3") ?? 3,
             "agent_forward": value("forwardagent") == "yes",
         ]
+        if !knownHostsFiles.isEmpty { spec["known_hosts_files"] = knownHostsFiles }
         var algorithms: [String: [String]] = [:]
         for (field, key) in [
             ("kexalgorithms", "kex"), ("ciphers", "cipher"), ("macs", "mac"),
@@ -149,7 +174,8 @@ nonisolated enum SSHConfiguration {
                     hopPort = number
                     hop = String(hop[..<colon])
                 }
-                var resolved = try resolve(destination: hop, port: hopPort, depth: depth + 1)
+                var resolved = try resolve(
+                    destination: hop, port: hopPort, configPath: configPath, depth: depth + 1)
                 if let chain { resolved["jump"] = chain }
                 chain = resolved
             }
