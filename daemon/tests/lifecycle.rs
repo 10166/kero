@@ -385,8 +385,19 @@ fn slow_client_cannot_block_background_output_and_reconnect_is_fast() {
         String::from_utf8_lossy(&rss.stdout).trim()
     );
     let reconnect = Instant::now();
-    let mut next = daemon.connect();
-    next.attach(&session.key);
+    let mut next = loop {
+        let mut next = daemon.connect();
+        if matches!(
+            next.request(Request::Attach {
+                key: session.key.clone()
+            }),
+            Event::Attached { .. }
+        ) {
+            break next;
+        }
+        assert!(reconnect.elapsed() < Duration::from_secs(12), "slow detach");
+        std::thread::sleep(Duration::from_millis(10));
+    };
     next.input(b"printf 'RECONNECTED:%s\\n' $$\n");
     next.until(&format!("RECONNECTED:{}", session.pid));
     eprintln!(

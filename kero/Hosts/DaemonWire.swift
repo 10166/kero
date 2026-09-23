@@ -69,6 +69,16 @@ nonisolated final class DaemonWire: @unchecked Sendable {
         guard count <= Self.maximumFrame else { throw Failure("Daemon frame exceeds the limit") }
         return (header[4], try readExactly(count))
     }
+
+    /// Opportunistically drains output already queued on the socket. A frame
+    /// boundary is still a rendering boundary, so the caller must retain any
+    /// non-output frame returned here and handle it immediately afterwards.
+    func tryReadFrame() throws -> (UInt8, Data)? {
+        var ready = pollfd(fd: reader, events: Int16(POLLIN), revents: 0)
+        guard poll(&ready, 1, 0) > 0, ready.revents & Int16(POLLIN) != 0 else { return nil }
+        return try readFrame()
+    }
+
     private func readExactly(_ count: Int) throws -> Data {
         var data = Data(count: count)
         try data.withUnsafeMutableBytes { buffer in

@@ -193,8 +193,16 @@ final class DaemonTerminalTransport: TerminalTransport {
                 var sequence = attachedInfo.sequence
                 var checkpoint = Data()
                 var ready = false
+                var pendingFrame: (UInt8, Data)?
                 while !Task.isCancelled {
-                    let (kind, payload) = try connection.readFrame()
+                    let frame: (UInt8, Data)
+                    if let queued = pendingFrame {
+                        frame = queued
+                        pendingFrame = nil
+                    } else {
+                        frame = try connection.readFrame()
+                    }
+                    let (kind, payload) = frame
                     switch kind {
                     case 4:
                         guard payload.count >= 9 else { throw DaemonWire.Failure("Invalid checkpoint") }
@@ -227,15 +235,28 @@ final class DaemonTerminalTransport: TerminalTransport {
                         guard ready, payload.count >= 8 else {
                             throw DaemonWire.Failure("Output arrived before checkpoint")
                         }
-                        let offset = payload.withUnsafeBytes {
+                        var batchedPayload = payload
+                        // Coalescing keeps expensive MainActor renders rare;
+                        // 1 MiB stays well inside DaemonWire's frame limit.
+                        while batchedPayload.count <= 1024 * 1024,
+                            let next = try connection.tryReadFrame()
+                        {
+                            if next.0 == 2 {
+                                batchedPayload.append(contentsOf: next.1.dropFirst(8))
+                            } else {
+                                pendingFrame = next
+                                break
+                            }
+                        }
+                        let offset = batchedPayload.withUnsafeBytes {
                             $0.loadUnaligned(as: UInt64.self).littleEndian
                         }
-                        guard offset == sequence + UInt64(payload.count - 8) else {
+                        guard offset == sequence + UInt64(batchedPayload.count - 8) else {
                             throw DaemonWire.Failure("Terminal output sequence gap")
                         }
                         sequence = offset
                         await self?.deliver(
-                            Data(payload.dropFirst(8)), bootstrap: false, generation: generation)
+                            Data(batchedPayload.dropFirst(8)), bootstrap: false, generation: generation)
                     case 1:
                         let value = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
                         if value?["event"] as? String == "directory", let path = value?["path"] as? String {

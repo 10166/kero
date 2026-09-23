@@ -400,7 +400,7 @@ impl Runtime {
                         let close = stream.try_clone()?;
                         let owned_session = session.clone();
                         std::thread::spawn(move || {
-                            for Frame(kind, bytes) in rx {
+                            while let Some(Frame(kind, bytes)) = rx.receive() {
                                 if write_frame(&mut *output.lock().unwrap(), kind, &bytes).is_err()
                                 {
                                     break;
@@ -423,7 +423,7 @@ impl Runtime {
                         let close = stream.try_clone()?;
                         let owned_session = session.clone();
                         std::thread::spawn(move || {
-                            for Frame(kind, bytes) in rx {
+                            while let Some(Frame(kind, bytes)) = rx.receive() {
                                 if write_frame(&mut *output.lock().unwrap(), kind, &bytes).is_err()
                                 {
                                     break;
