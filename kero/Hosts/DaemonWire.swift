@@ -69,6 +69,7 @@ nonisolated final class DaemonWire: @unchecked Sendable {
         guard count <= Self.maximumFrame else { throw Failure("Daemon frame exceeds the limit") }
         return (header[4], try readExactly(count))
     }
+
     private func readExactly(_ count: Int) throws -> Data {
         var data = Data(count: count)
         try data.withUnsafeMutableBytes { buffer in

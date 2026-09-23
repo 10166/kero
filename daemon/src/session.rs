@@ -1,19 +1,30 @@
 //! PTY ownership adapted from tty7-core daemon/pane.rs at the pinned revision.
 //! Apache-2.0 attribution: see ../Vendor/tty7-core/{LICENSE,KERO-VENDOR.md}.
 //!
-//! Kero deliberately disconnects a slow subscriber instead of applying tty7's
-//! output gate to the PTY reader: a parked GUI must never stop a background job.
+//! Kero deliberately detaches only a *sustained* slow subscriber instead of
+//! applying tty7's output gate to the PTY reader: a parked GUI must never stop
+//! a background job, but ordinary rendering bursts must not tear off the pane.
 use crate::protocol::*;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const CLIENT_FRAMES: usize = 64;
 const MAX_INPUT: usize = 64 * 1024;
+const PTY_READ_BYTES: usize = 64 * 1024;
+/// A terminal checkpoint itself is bounded at 32 MiB. The extra headroom
+/// covers attached/checkpoint/event framing so a legal max-state checkpoint
+/// cannot be mistaken for a runaway renderer queue.
+const OUTPUT_QUEUE_BYTES: usize = 40 * 1024 * 1024;
+const OUTPUT_HIGH_WATER_BYTES: usize = 8 * 1024 * 1024;
+const OUTPUT_COALESCE_BYTES: usize = 1024 * 1024;
+const SLOW_CONSUMER_GRACE: Duration = Duration::from_secs(10);
+const SLOW_CONSUMER_CHECK: Duration = Duration::from_millis(100);
 
 const INPUT_QUEUE_BYTES: usize = 2 * 1024 * 1024;
 #[derive(Default)]
@@ -70,18 +81,229 @@ mod input_tests {
     }
 }
 
+/// A bounded queue for one attached renderer. Unlike a frame-count channel,
+/// this measures bytes and merges contiguous terminal output. A short GUI
+/// stall therefore absorbs an image/redraw burst instead of disconnecting;
+/// only a subscriber that stays above the high-water mark is detached, so a
+/// background job never waits on the GUI.
+pub(crate) struct OutputQueue {
+    state: Mutex<OutputQueueState>,
+    ready: Condvar,
+}
+
+struct OutputQueueState {
+    frames: VecDeque<Frame>,
+    bytes: usize,
+    slow_since: Option<Instant>,
+    closed: bool,
+    capacity: usize,
+    high_water: usize,
+    coalesce_limit: usize,
+    grace: Duration,
+}
+
+impl OutputQueue {
+    fn terminal() -> Arc<Self> {
+        Self::new(
+            OUTPUT_QUEUE_BYTES,
+            OUTPUT_HIGH_WATER_BYTES,
+            OUTPUT_COALESCE_BYTES,
+            SLOW_CONSUMER_GRACE,
+        )
+    }
+
+    fn new(
+        capacity: usize,
+        high_water: usize,
+        coalesce_limit: usize,
+        grace: Duration,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(OutputQueueState {
+                frames: VecDeque::new(),
+                bytes: 0,
+                slow_since: None,
+                closed: false,
+                capacity,
+                high_water,
+                coalesce_limit,
+                grace,
+            }),
+            ready: Condvar::new(),
+        })
+    }
+
+    fn send(&self, frame: Frame) -> bool {
+        let payload_bytes = frame.1.len();
+        let mut state = self.state.lock().unwrap();
+        if state.closed {
+            return false;
+        }
+
+        // Terminal output payloads start with the sequence *after* those
+        // bytes. A frame is contiguous when its end sequence equals the prior
+        // end plus only the new bytes; merging keeps stream order while
+        // avoiding a syscall and MainActor hop for every tiny PTY read.
+        if frame.0 == OUTPUT
+            && state.frames.back().is_some_and(|last| {
+                last.0 == OUTPUT
+                    && last.1.len() <= state.coalesce_limit
+                    && frame.1.len() <= state.coalesce_limit
+                    && last.1.len() + frame.1.len() - 8 <= state.coalesce_limit
+            })
+        {
+            let last = state.frames.back_mut().unwrap();
+            let previous_header = u64::from_le_bytes(last.1[..8].try_into().unwrap());
+            let next_header = u64::from_le_bytes(frame.1[..8].try_into().unwrap());
+            if next_header == previous_header + (frame.1.len() - 8) as u64 {
+                last.1.extend_from_slice(&frame.1[8..]);
+                // The incoming header already covers the newly appended bytes
+                // as well as everything already in the merged frame.
+                last.1[..8].copy_from_slice(&next_header.to_le_bytes());
+                state.bytes += payload_bytes;
+            } else {
+                state.frames.push_back(frame);
+                state.bytes += payload_bytes;
+            }
+        } else {
+            state.frames.push_back(frame);
+            state.bytes += payload_bytes;
+        }
+
+        if state.bytes >= state.high_water {
+            let slow_since = *state.slow_since.get_or_insert(Instant::now());
+            if state.bytes > state.capacity || slow_since.elapsed() >= state.grace {
+                state.closed = true;
+                state.frames.clear();
+                state.bytes = 0;
+                drop(state);
+                self.ready.notify_all();
+                return false;
+            }
+        } else {
+            state.slow_since = None;
+        }
+
+        self.ready.notify_one();
+        true
+    }
+
+    pub(crate) fn receive(&self) -> Option<Frame> {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            // A producer can stop immediately after filling the queue. The
+            // writer still has to enforce the grace period; otherwise a stalled
+            // GUI could pin a finished session's outbox forever.
+            if let Some(slow_since) = state.slow_since
+                && slow_since.elapsed() >= state.grace
+            {
+                state.closed = true;
+                state.frames.clear();
+                state.bytes = 0;
+                drop(state);
+                self.ready.notify_all();
+                return None;
+            }
+            if let Some(frame) = state.frames.pop_front() {
+                state.bytes = state.bytes.saturating_sub(frame.1.len());
+                if state.bytes < state.high_water {
+                    state.slow_since = None;
+                }
+                return Some(frame);
+            }
+            if state.closed {
+                return None;
+            }
+            (state, _) = self.ready.wait_timeout(state, SLOW_CONSUMER_CHECK).unwrap();
+        }
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.closed {
+            return;
+        }
+        state.closed = true;
+        state.frames.clear();
+        state.bytes = 0;
+        drop(state);
+        self.ready.notify_all();
+    }
+}
+
 struct Subscriber {
-    frames: mpsc::SyncSender<Frame>,
+    frames: Arc<OutputQueue>,
     socket: UnixStream,
 }
 impl Subscriber {
     fn send(&self, frame: Frame) -> bool {
-        if self.frames.try_send(frame).is_ok() {
+        if self.frames.send(frame) {
             return true;
         }
         // Shutdown also wakes a writer blocked on a peer that stopped reading.
         let _ = self.socket.shutdown(Shutdown::Both);
         false
+    }
+    fn close(&self) {
+        self.frames.close();
+        let _ = self.socket.shutdown(Shutdown::Both);
+    }
+}
+
+#[cfg(test)]
+mod output_queue_tests {
+    use super::*;
+
+    fn output(start: u64, bytes: usize) -> Frame {
+        let mut payload = start.to_le_bytes().to_vec();
+        payload.extend(std::iter::repeat_n(0xa5, bytes));
+        Frame(OUTPUT, payload)
+    }
+
+    #[test]
+    fn contiguous_output_coalesces_and_preserves_stream_order() {
+        let queue = OutputQueue::new(1024, 1024, 1024, Duration::from_secs(1));
+        assert!(queue.send(output(100, 100)));
+        assert!(queue.send(output(140, 40)));
+        assert!(queue.send(output(150, 10)));
+        // A different frame kind is a boundary and must never merge.
+        assert!(queue.send(Frame::event(Event::Directory { path: "/".into() })));
+        assert!(queue.send(output(166, 10)));
+
+        let first = queue.receive().unwrap();
+        assert_eq!(first.0, OUTPUT);
+        assert_eq!(u64::from_le_bytes(first.1[..8].try_into().unwrap()), 150);
+        assert_eq!(first.1.len(), 8 + 150);
+        let boundary = queue.receive().unwrap();
+        assert_eq!(boundary.0, CONTROL);
+        let second = queue.receive().unwrap();
+        assert_eq!(u64::from_le_bytes(second.1[..8].try_into().unwrap()), 166);
+    }
+
+    #[test]
+    fn a_short_burst_may_exceed_the_old_frame_channel_budget() {
+        // The old 64 × 16 KiB channel disconnected during bursts around 1 MiB.
+        let queue = OutputQueue::new(4 * 1024 * 1024, 1024, 1024, Duration::from_secs(1));
+        for index in 0..192 {
+            assert!(queue.send(output(index as u64 * 4096, 4096)));
+        }
+        let mut received = 0;
+        for _ in 0..192 {
+            assert!(queue.receive().is_some());
+            received += 1;
+        }
+        queue.close();
+        assert!(queue.receive().is_none());
+        assert_eq!(received, 192);
+    }
+
+    #[test]
+    fn a_sustained_slow_consumer_is_detached() {
+        let queue = OutputQueue::new(1024, 512, 1024, Duration::from_millis(10));
+        assert!(queue.send(output(0, 600)));
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!queue.send(output(600, 10)));
+        assert!(queue.receive().is_none());
     }
 }
 
@@ -223,7 +445,7 @@ impl Session {
         });
         let output_session = session.clone();
         std::thread::spawn(move || {
-            let mut buffer = [0; 16 * 1024];
+            let mut buffer = [0; PTY_READ_BYTES];
             loop {
                 let mut ready = libc::pollfd {
                     fd: read_fd,
@@ -318,21 +540,21 @@ impl Session {
 
     /// Checkpoint and subscription share the parser/sequence lock. The first
     /// live output therefore starts exactly after the checkpoint's offset.
-    pub fn attach(
+    pub(crate) fn attach(
         &self,
         client: Uuid,
         socket: UnixStream,
-    ) -> anyhow::Result<mpsc::Receiver<Frame>> {
+    ) -> anyhow::Result<Arc<OutputQueue>> {
         self.attach_sized(client, socket, None)
     }
 
-    pub fn attach_sized(
+    pub(crate) fn attach_sized(
         &self,
         client: Uuid,
         socket: UnixStream,
         size: Option<Size>,
-    ) -> anyhow::Result<mpsc::Receiver<Frame>> {
-        let (tx, rx) = mpsc::sync_channel(CLIENT_FRAMES);
+    ) -> anyhow::Result<Arc<OutputQueue>> {
+        let outbox = OutputQueue::terminal();
         let mut state = self.state.lock().unwrap();
         anyhow::ensure!(state.subscribers.is_empty(), "session already controlled");
         if let Some(size) = size {
@@ -344,7 +566,10 @@ impl Session {
             state.info.size = size;
         }
         let checkpoint = state.terminal.checkpoint().map_err(anyhow::Error::msg)?;
-        let subscriber = Subscriber { frames: tx, socket };
+        let subscriber = Subscriber {
+            frames: outbox.clone(),
+            socket,
+        };
         subscriber.send(Frame::event(Event::Attached {
             session: state.info.clone(),
         }));
@@ -363,7 +588,7 @@ impl Session {
             subscriber.send(Frame::event(Event::Exited { code }));
         }
         state.subscribers.insert(client, subscriber);
-        Ok(rx)
+        Ok(outbox)
     }
 
     pub fn checkpoint(&self, client: Uuid) -> anyhow::Result<()> {
@@ -388,7 +613,9 @@ impl Session {
     }
 
     pub fn detach(&self, client: Uuid) {
-        self.state.lock().unwrap().subscribers.remove(&client);
+        if let Some(subscriber) = self.state.lock().unwrap().subscribers.remove(&client) {
+            subscriber.close();
+        }
     }
     pub fn finished_and_detached(&self) -> bool {
         let state = self.state.lock().unwrap();
