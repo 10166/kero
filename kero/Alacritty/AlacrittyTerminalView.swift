@@ -59,6 +59,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     /// with OSC 22, matching the `.text` default of Kero's Ghostty panes.
     private var mouseShapeCursor: NSCursor = .iBeam
     private var reportingMouseButton = false
+    private var pendingCapturedMouseDown: NSEvent?
     private var lastReportedFocus: Bool?
     private var cursorTimer: Timer?
     private var cursorBlinking = false
@@ -177,6 +178,8 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     // MARK: - Lifecycle
+
+    func startLocal(launch: TerminalLaunch) { start(launch: launch) }
 
     private func start(launch: TerminalLaunch) {
         let size = gridSize(for: bounds.size)
@@ -988,9 +991,8 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             if let handle { kero_alacritty_mark_exited(handle) }
             events?.terminalDidClose(processAlive: false)
         case KERO_EVENT_CLIPBOARD_STORE:
-            guard !isRemoteRenderer else { return }
-            // OSC 52 copy. Reads are refused in the bridge, so this is the
-            // only clipboard traffic a program can generate.
+            // Remote OSC 52 copy is a write to the local clipboard. Reads
+            // remain blocked below so SSH output cannot fetch its contents.
             let text = String(decoding: payload, as: UTF8.self)
             guard !text.isEmpty else { return }
             NSPasteboard.general.clearContents()
@@ -1549,6 +1551,7 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     override func mouseDown(with event: NSEvent) {
+        pendingCapturedMouseDown = nil
         let localPoint = convert(event.locationInWindow, from: nil)
         if isRemotelyControlled, remoteControlBanner.frame.contains(localPoint) {
             onTakeBackRemoteControl?()
@@ -1561,11 +1564,22 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
             events?.terminalDidRequestOpenURL(hit.value)
             return
         }
-        if shouldReportMouse(event) {
+        if shouldReportMouse(event), event.clickCount == 1 {
+            if event.modifierFlags.intersection([.control, .option, .command]).isEmpty {
+                // Preserve TUI clicks while letting a plain drag make a
+                // native selection that Cmd-C can copy.
+                pendingCapturedMouseDown = event
+                return
+            }
             reportingMouseButton = true
             sendMouse(code: 0, event: event, released: false)
             return
         }
+        startSelection(with: event, handle: handle)
+        scheduleRender(force: true)
+    }
+
+    private func startSelection(with event: NSEvent, handle: OpaquePointer) {
         let point = gridPoint(for: event)
         let kind: UInt32 = switch event.clickCount {
         case 2: 1 // word
@@ -1576,7 +1590,6 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
         kero_alacritty_selection_start(
             handle, Int32(point.line), point.column, kind, point.rightHalf
         )
-        scheduleRender(force: true)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -1588,6 +1601,10 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if let down = pendingCapturedMouseDown, let handle {
+            pendingCapturedMouseDown = nil
+            startSelection(with: down, handle: handle)
+        }
         if reportingMouseButton {
             if terminalMode.contains(.mouseDrag) || terminalMode.contains(.mouseMotion) {
                 sendMouse(code: 32, event: event, released: false)
@@ -1603,6 +1620,12 @@ final class AlacrittyTerminalView: NSView, TerminalBackendSurface, NSUserInterfa
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let down = pendingCapturedMouseDown {
+            pendingCapturedMouseDown = nil
+            sendMouse(code: 0, event: down, released: false)
+            sendMouse(code: 0, event: event, released: true)
+            return
+        }
         if reportingMouseButton {
             reportingMouseButton = false
             sendMouse(code: 0, event: event, released: true)

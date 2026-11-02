@@ -193,6 +193,11 @@ final class TerminalManager: nonisolated ObservableObject {
                 guard !TerminalManager.isQuitting else { return }
                 TerminalManager.isQuitting = true
                 TerminalManager.saveAll(captureTerminalHistory: true)
+                for manager in TerminalManager.registry {
+                    for session in manager.projects.flatMap(\.sessions) {
+                        session.closeDirectLocal()
+                    }
+                }
             }
         RemoteControlService.shared.topologyDidChange()
     }
@@ -903,7 +908,7 @@ final class TerminalManager: nonisolated ObservableObject {
     }
 
     /// Preserve closed windows for reopening and detach their subscriptions.
-    /// The daemon owns every shell independently of window lifetime.
+    /// SSH and legacy daemon sessions keep running; direct local PTYs end.
     func windowClosed() {
         guard !Self.isQuitting else { return }
         let window = makeWindowSnapshot(captureTerminalHistory: true)
@@ -914,7 +919,13 @@ final class TerminalManager: nonisolated ObservableObject {
             SessionStore.save(Self.pendingRestores)
             TerminalHistoryStore.save(Self.pendingHistories)
         } else { Self.saveAll(captureTerminalHistory: false) }
-        projects.flatMap(\.sessions).forEach { $0.detach() }
+        for session in projects.flatMap(\.sessions) {
+            if session.isDirectLocal {
+                session.closeDirectLocal()
+            } else {
+                session.detach()
+            }
+        }
         if Self.registry.isEmpty { HostGroups.shared.detachAll() }
     }
 

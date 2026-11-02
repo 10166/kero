@@ -31,9 +31,6 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     var remoteOutput: ((Data) -> Void)?
     var remoteConnection: (any TerminalTransport)?
     var isRemoteRenderer = false
-    /// The `/bin/sh -c …` line this surface launched, kept so a live
-    /// re-configure can restate it rather than start a second shell.
-    var launchCommand = ""
     /// Latest scroll report, so a scrollbar drag can be mapped back onto a row.
     var lastScroll: TerminalScrollPosition?
     /// Ghostty reports the recognized link under the pointer as hover state.
@@ -45,6 +42,8 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     private var isCapturingHistoryExport = false
     private var capturedHistoryExportPath: String?
     private var isSurfaceVisible = false
+    private var pendingCapturedMouseDown: NSEvent?
+    private var isSelectingCapturedText = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -300,13 +299,64 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     }
 
     override func mouseDown(with event: NSEvent) {
+        pendingCapturedMouseDown = nil
+        isSelectingCapturedText = false
         let point = convert(event.locationInWindow, from: nil)
         if isRemotelyControlled, remoteControlBanner.frame.contains(point) {
             onTakeBackRemoteControl?()
             return
         }
         focusForInteraction()
+        if isMouseCapturedByProgram {
+            if event.clickCount > 1 {
+                // Double and triple clicks retain native word/line selection.
+                isSelectingCapturedText = true
+                super.mouseDown(with: selectionEvent(event))
+                return
+            }
+            if event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+                // A click still reaches the TUI on mouse-up. Waiting until
+                // the first drag lets ordinary dragging select text for Cmd-C
+                // without taking click navigation away from the program.
+                pendingCapturedMouseDown = event
+                return
+            }
+        }
         super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if let down = pendingCapturedMouseDown {
+            pendingCapturedMouseDown = nil
+            isSelectingCapturedText = true
+            super.mouseDown(with: selectionEvent(down))
+        }
+        super.mouseDragged(with: isSelectingCapturedText ? selectionEvent(event) : event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if let down = pendingCapturedMouseDown {
+            pendingCapturedMouseDown = nil
+            super.mouseDown(with: down)
+            super.mouseUp(with: event)
+            return
+        }
+        super.mouseUp(with: isSelectingCapturedText ? selectionEvent(event) : event)
+        isSelectingCapturedText = false
+    }
+
+    private func selectionEvent(_ event: NSEvent) -> NSEvent {
+        NSEvent.mouseEvent(
+            with: event.type,
+            location: event.locationInWindow,
+            modifierFlags: event.modifierFlags.union(.shift),
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: event.context,
+            eventNumber: event.eventNumber,
+            clickCount: event.clickCount,
+            pressure: event.pressure
+        ) ?? event
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {

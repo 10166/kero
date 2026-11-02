@@ -43,8 +43,9 @@ Alacritty bridge and `go test ./...` from `relay/` for the relay.
 
 ## Headless daemon development
 
-Local and SSH terminals use [`kero-daemon`](daemon/README.md). Build its four
-checksum-manifested installer assets before a Release build. The daemon README
+SSH terminals use [`kero-daemon`](daemon/README.md); local terminals use direct
+PTYs. Build the daemon's four checksum-manifested installer assets before a
+Release build. The daemon README
 also documents the pinned Ghostty source build required by both renderers.
 
 Run `cargo test --locked --manifest-path daemon/Cargo.toml` for process and

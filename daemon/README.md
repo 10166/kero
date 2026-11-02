@@ -1,9 +1,10 @@
-# Kero persistent sessions
+# Kero persistent SSH sessions
 
-Kero's local and SSH terminals use `kero-daemon` to own their PTYs. Ghostty and
-Alacritty are renderer-only clients. Closing a window, quitting the app,
+SSH terminals use `kero-daemon` to own their PTYs. Ghostty and Alacritty are
+renderer-only clients for those sessions. Closing a window, quitting the app,
 collapsing a host group, or losing a connection detaches the client. Explicitly
-closing a connected terminal or project ends its shell after daemon confirmation.
+closing a connected SSH terminal or project ends its shell after daemon confirmation.
+Local terminals use direct PTYs and end when their window or app closes.
 
 The AppKit sidebar groups local projects, SSH hosts, and existing relay devices.
 Only expanded groups connect, subscribe, and retry. Collapsed selections display
@@ -13,12 +14,13 @@ end-to-end encryption, single-controller lease, and reclaim flow are retained.
 
 ## Restoration
 
-A live daemon restores the same process, environment, directory, jobs, and
+A live SSH daemon restores the same process, environment, directory, jobs, and
 terminal state. Host, daemon-instance, session, project, tab and pane identities
 are persisted. A daemon restart changes its instance ID: old references cannot
-attach to another process. Reopening then starts a new login shell, restores
-bounded primary history and directory, and shows a new-shell notice. Previous
-task commands are never re-executed. Legacy layouts remain readable.
+attach to another process. Reopening then starts a new login shell and restores
+bounded primary history and directory. Previous task commands are never
+re-executed. Local layouts reopen with a new direct shell and optional bounded
+history; old saved local daemon sessions are retired in the background.
 
 The authoritative terminal parser lives in `terminal-state/`. Attach takes a
 checkpoint under the same lock as PTY parsing and byte sequencing. It encodes
@@ -38,8 +40,9 @@ the shared graphics implementation.
 
 ## Remote projects and installation
 
-`HostService` binds every file and Git operation to an expanded host capability
-and a daemon host UUID. Files support create/read/save/rename/remove and directory
+`HostService` binds remote file and Git operations to an expanded host capability
+and a daemon host UUID; local operations use the filesystem and Git directly.
+Files support create/read/save/rename/remove and directory
 watching. Saves compare SHA-256 before atomic replacement; dirty editors survive
 disconnection, window close and app restart. Git status, stage, commit, branches
 and diffs use the same host service. No uncertain write or Git operation is

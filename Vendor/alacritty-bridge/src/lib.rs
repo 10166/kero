@@ -1418,9 +1418,9 @@ pub unsafe extern "C" fn kero_alacritty_new_remote(
     let term_config = Config {
         scrolling_history: config.scrollback_lines.max(1),
         default_cursor_style: configured_cursor_style(config.cursor_shape, config.cursor_blinking),
-        // A remote renderer must never expose the controller's clipboard to a
-        // program running on the host.
-        osc52: Osc52::Disabled,
+        // A remote program may copy text to the controller, but must never
+        // read the controller's clipboard through OSC 52.
+        osc52: Osc52::OnlyCopy,
         ..Default::default()
     };
     let size = TermSize {
@@ -2683,6 +2683,37 @@ mod tests {
             b"\x1b_Ga=T,f=32,s=1,v=1,i=7;AQID/w==\x1b\\",
         );
         assert!(graphics.lock().state.has_placements());
+    }
+
+    #[test]
+    fn remote_osc52_can_copy_but_cannot_read_the_local_clipboard() {
+        let events = Mutex::new(Vec::<(u32, Vec<u8>)>::new());
+        let mut config: KeroConfig = unsafe { std::mem::zeroed() };
+        config.columns = 80;
+        config.rows = 24;
+        let handle = unsafe {
+            kero_alacritty_new_remote(
+                &config,
+                &theme(),
+                capture_event,
+                &events as *const _ as *mut c_void,
+            )
+        };
+        assert!(!handle.is_null());
+
+        let copy = b"\x1b]52;c;a2Vyby1jb3B5\x07";
+        unsafe { kero_alacritty_feed(handle, copy.as_ptr(), copy.len()) };
+        assert!(events.lock().unwrap().iter().any(|(kind, payload)| {
+            *kind == KERO_EVENT_CLIPBOARD_STORE && payload == b"kero-copy"
+        }));
+
+        events.lock().unwrap().clear();
+        let read = b"\x1b]52;c;?\x07";
+        unsafe { kero_alacritty_feed(handle, read.as_ptr(), read.len()) };
+        assert!(!events.lock().unwrap().iter().any(|(kind, _)| {
+            *kind == KERO_EVENT_CLIPBOARD_LOAD
+        }));
+        unsafe { kero_alacritty_free(handle) };
     }
 
     #[test]

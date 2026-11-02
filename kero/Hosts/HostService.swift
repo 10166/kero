@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// A capability for one expansion of one host. Collapsing invalidates the
@@ -12,6 +13,7 @@ nonisolated final class HostService: @unchecked Sendable {
     private var imageUploadSupported = false
     private var wires: [UUID: DaemonWire] = [:]
     private var idle: [(UUID, DaemonWire, String)] = []
+    private var isLocal: Bool { hostID == HostGroups.localID }
     init(hostID: UUID, socketPath: String?) {
         self.hostID = hostID
         self.socketPath = socketPath
@@ -81,6 +83,7 @@ nonisolated final class HostService: @unchecked Sendable {
     }
     func request(_ action: String, path: String, fields: [String: Any] = [:]) throws -> [String: Any] {
         guard path.hasPrefix("/") else { throw DaemonWire.Failure("Host paths must be absolute") }
+        if isLocal { return try localRequest(action, path: path, fields: fields) }
         let (id, wire, host) = try open()
         var succeeded = false
         defer { if succeeded { recycle(id, wire, host) } else { finish(id, wire) } }
@@ -136,6 +139,11 @@ nonisolated final class HostService: @unchecked Sendable {
         return path
     }
     func read(_ path: String) throws -> File {
+        if isLocal {
+            try checkActive()
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            return File(data: data, sha256: Self.hash(data))
+        }
         let value = try request("read", path: path)
         guard let base64 = value["data"] as? String, let data = Data(base64Encoded: base64),
             let hash = value["sha256"] as? String
@@ -143,6 +151,30 @@ nonisolated final class HostService: @unchecked Sendable {
         return File(data: data, sha256: hash)
     }
     @discardableResult func write(_ path: String, data: Data, expected: String) throws -> String {
+        if isLocal {
+            try checkActive()
+            let url = URL(fileURLWithPath: path)
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw DaemonWire.Failure("Only regular local files can be saved")
+            }
+            let current = try Data(contentsOf: url)
+            guard Self.hash(current) == expected else {
+                throw DaemonWire.Failure("File changed on disk. Refresh before saving.")
+            }
+            let permissions = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions]
+            // Verify again immediately before the atomic replacement. The
+            // comparison guards ordinary external edits without claiming to
+            // provide a filesystem transaction against another writer.
+            try checkActive()
+            try data.write(to: url, options: .atomic)
+            if let permissions {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: permissions], ofItemAtPath: path
+                )
+            }
+            return Self.hash(data)
+        }
         let value = try request(
             "write", path: path,
             fields: ["data": data.base64EncodedString(), "expected_sha256": expected])
@@ -157,6 +189,33 @@ nonisolated final class HostService: @unchecked Sendable {
         let is_symlink: Bool
     }
     func directory(_ path: String) throws -> [Entry] {
+        if isLocal {
+            try checkActive()
+            // Foundation's URL directory enumerator rejects a symlink used as
+            // the directory URL, even though POSIX and the remote daemon follow it.
+            let directoryURL = URL(fileURLWithPath: path, isDirectory: true)
+                .resolvingSymlinksInPath()
+            let urls = try FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: []
+            )
+            return try urls.map { url in
+                let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                let symlink = values.isSymbolicLink == true
+                // Match the remote daemon: a link to a directory remains expandable.
+                var isDirectory = values.isDirectory == true
+                if symlink {
+                    var targetIsDirectory: ObjCBool = false
+                    isDirectory = FileManager.default.fileExists(
+                        atPath: url.path, isDirectory: &targetIsDirectory
+                    ) && targetIsDirectory.boolValue
+                }
+                return Entry(
+                    name: url.lastPathComponent, is_dir: isDirectory, is_symlink: symlink
+                )
+            }
+        }
         let value = try request("read_directory", path: path)
         return try JSONDecoder().decode(
             [Entry].self, from: JSONSerialization.data(withJSONObject: value["entries"] ?? []))
@@ -164,6 +223,13 @@ nonisolated final class HostService: @unchecked Sendable {
     func git(_ arguments: [String], in path: String) -> (
         status: Int32, stdout: String, stderr: String
     ) {
+        if isLocal {
+            do { try checkActive() }
+            catch { return (-1, "", error.localizedDescription) }
+            return HostService.$current.withValue(nil) {
+                GitStatusModel.runGit(arguments, in: path)
+            }
+        }
         do {
             let response = try request("git", path: path, fields: ["arguments": arguments])
             guard let output = response["output"] as? [String: Any] else {
@@ -182,13 +248,17 @@ nonisolated final class HostService: @unchecked Sendable {
     final class Watch: @unchecked Sendable {
         private let lock = NSLock()
         private var wire: DaemonWire?
+        private var localSources: [DispatchSourceFileSystemObject] = []
         private var cancelled = false
         func cancel() {
             lock.lock()
             cancelled = true
             let wire = wire
+            let sources = localSources
+            localSources = []
             lock.unlock()
             wire?.close()
+            sources.forEach { $0.cancel() }
         }
         func attach(_ wire: DaemonWire) -> Bool {
             lock.lock()
@@ -200,8 +270,40 @@ nonisolated final class HostService: @unchecked Sendable {
             self.wire = wire
             return true
         }
+        func attachLocal(_ sources: [DispatchSourceFileSystemObject]) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !cancelled else { return false }
+            localSources = sources
+            return true
+        }
     }
     func watch(_ paths: [String], token: Watch, changed: @escaping @Sendable () -> Void) throws {
+        if isLocal {
+            try checkActive()
+            // A directory descriptor reports changes to its immediate entries.
+            // FileTreeModel supplies the root plus each expanded directory.
+            let sources = paths.compactMap { path -> DispatchSourceFileSystemObject? in
+                let descriptor = Darwin.open(path, O_EVTONLY)
+                guard descriptor >= 0 else { return nil }
+                let source = DispatchSource.makeFileSystemObjectSource(
+                    fileDescriptor: descriptor,
+                    eventMask: [.write, .delete, .rename, .attrib],
+                    queue: .global(qos: .utility)
+                )
+                source.setEventHandler(handler: changed)
+                source.setCancelHandler { Darwin.close(descriptor) }
+                return source
+            }
+            guard token.attachLocal(sources) else {
+                // Dispatch sources must be resumed even when cancellation
+                // races their registration.
+                sources.forEach { $0.resume(); $0.cancel() }
+                return
+            }
+            sources.forEach { $0.resume() }
+            return
+        }
         let (id, wire, host) = try open()
         defer { finish(id, wire) }
         guard token.attach(wire) else { return }
@@ -214,5 +316,70 @@ nonisolated final class HostService: @unchecked Sendable {
     }
     static func hash(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func checkActive() throws {
+        lock.lock()
+        let allowed = active
+        lock.unlock()
+        guard allowed else { throw DaemonWire.Failure("Host was disconnected") }
+    }
+
+    private func localRequest(
+        _ action: String, path: String, fields: [String: Any]
+    ) throws -> [String: Any] {
+        try checkActive()
+        let url = URL(fileURLWithPath: path)
+        let fileManager = FileManager.default
+        switch action {
+        case "read":
+            let file = try read(path)
+            return ["data": file.data.base64EncodedString(), "sha256": file.sha256]
+        case "read_directory":
+            let entries = try directory(path).map {
+                ["name": $0.name, "is_dir": $0.is_dir, "is_symlink": $0.is_symlink] as [String: Any]
+            }
+            return ["entries": entries]
+        case "git":
+            guard let arguments = fields["arguments"] as? [String] else {
+                throw DaemonWire.Failure("Invalid Git arguments")
+            }
+            let result = git(arguments, in: path)
+            return ["output": [
+                "status": Int(result.status),
+                "stdout": Data(result.stdout.utf8).base64EncodedString(),
+                "stderr": Data(result.stderr.utf8).base64EncodedString(),
+            ]]
+        case "repository":
+            let result = git(["rev-parse", "--show-toplevel"], in: path)
+            let root = result.status == 0
+                ? result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : path
+            return ["path": ["host": hostID.uuidString, "path": root]]
+        case "create_file":
+            // An existence check followed by createFile can overwrite a file
+            // another process creates in between. O_EXCL keeps new-file
+            // creation atomic like the daemon's create_new operation.
+            let descriptor = Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL, 0o666)
+            guard descriptor >= 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            Darwin.close(descriptor)
+            return [:]
+        case "create_directory":
+            try fileManager.createDirectory(at: url, withIntermediateDirectories: false)
+            return [:]
+        case "rename":
+            guard let destination = fields["destination"] as? String,
+                  destination.hasPrefix("/") else {
+                throw DaemonWire.Failure("Invalid destination")
+            }
+            try fileManager.moveItem(atPath: path, toPath: destination)
+            return [:]
+        case "remove":
+            try fileManager.removeItem(at: url)
+            return [:]
+        default:
+            throw DaemonWire.Failure("Unsupported local file operation: \(action)")
+        }
     }
 }

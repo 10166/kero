@@ -14,8 +14,10 @@ struct SettingsView: View {
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
 
-    /// Installed fixed-pitch families (bundled default first).
-    private let families = TerminalFont.selectableFamilies()
+    /// Font enumeration is expensive on macOS. The Settings scene is built at
+    /// app launch, so wait until its window is shown before querying families.
+    @State private var families: [String] = []
+    @State private var hasLoadedFamilies = false
 
     private var toolbarVisibilityDescription: LocalizedStringKey {
         switch settings.toolbarVisibility {
@@ -30,6 +32,11 @@ struct SettingsView: View {
 
     var body: some View {
         CappedIdealHeight(maxHeight: 600) { form }
+            .onAppear {
+                guard !hasLoadedFamilies else { return }
+                hasLoadedFamilies = true
+                families = TerminalFont.selectableFamilies()
+            }
     }
 
     private var form: some View {

@@ -26,9 +26,10 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     @Published var hasExited = false
     @Published private(set) var connectionState = DaemonTerminalTransport.State.disconnected
     @Published private(set) var restoredAsNewShell = false
-    let transport: DaemonTerminalTransport
-    var daemonIdentity: DaemonSessionIdentity? { transport.identity }
-    var isConnected: Bool { connectionState == .connected }
+    let transport: DaemonTerminalTransport?
+    var daemonIdentity: DaemonSessionIdentity? { transport?.identity }
+    var isDirectLocal: Bool { transport == nil }
+    var isConnected: Bool { isDirectLocal ? !hasExited : connectionState == .connected }
     @Published private(set) var commandLifecycle = TerminalCommandLifecycle()
     @Published private(set) var terminalCellSize: CGSize?
     @Published private(set) var isRemotelyControlled = false
@@ -53,6 +54,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     private let launchDirectoryURL: URL?
     private let shellPidFileURL: URL?
     private var cachedShellPid: pid_t?
+    private var pendingLocalLaunch: TerminalLaunch?
     private var lastHistorySnapshot: String?
     private var isTerminating = false
     private var imagePasteTask: Task<Void, Never>?
@@ -77,13 +79,19 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         let directCommand = commandArguments.flatMap { $0.isEmpty ? nil : $0 }
         let shellPath = directCommand?.first ?? Self.loginShell()
         let directory = hostID == HostGroups.localID ? Self.validWorkingDirectory(initialDirectory) : (initialDirectory ?? HostGroups.shared.definition(hostID)?.directory ?? "")
-        let artifacts = Self.makeLaunchArtifacts()
+        // Local sessions always use the renderer's direct PTY path. Old saved
+        // daemon identities are retired without delaying the new shell.
+        let directLocal = hostID == HostGroups.localID
+        let artifacts = Self.makeLaunchArtifacts(
+            restoredHistory: directLocal ? restoredHistory : nil
+        )
         let backend = AppSettings.shared.terminalBackend
         let script = Self.makeLaunchScript(
             backend: backend,
             shellPath: shellPath,
             commandArguments: directCommand,
-            pidFileURL: artifacts.pidFileURL
+            pidFileURL: artifacts.pidFileURL,
+            replayFileURL: artifacts.replayFileURL
         )
         let launch = TerminalLaunch(
             program: "/bin/sh",
@@ -106,41 +114,60 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         title = (shellPath as NSString).lastPathComponent
         agentStatus = nil
 
-        let transport = DaemonTerminalTransport(sessionID: sessionID, identity: daemonIdentity, launch: launch, hostID: hostID, legacyHistory: AppSettings.shared.restoreTerminalHistory ? restoredHistory : nil)
+        let transport = directLocal ? nil : DaemonTerminalTransport(
+            sessionID: sessionID, identity: daemonIdentity, launch: launch,
+            hostID: hostID,
+            legacyHistory: AppSettings.shared.restoreTerminalHistory ? restoredHistory : nil
+        )
         self.transport = transport
-        let surface = backend.makeRemoteSurface(connection: transport)
+        let surface: any TerminalBackendSurface
+        if let transport {
+            surface = backend.makeRemoteSurface(connection: transport)
+        } else if persistentID != nil {
+            surface = backend.makeDeferredLocalSurface()
+            pendingLocalLaunch = launch
+        } else {
+            surface = Self.makeSurface(backend: backend, launch: launch)
+        }
         self.surface = surface
         find = TerminalFind(surface: surface)
         lastHistorySnapshot = restoredHistory
         super.init()
 
-        transport.onDirectory = { [weak self] path in self?.workingDirectory=path }
-        transport.onSession = { [weak self] info, restarted in
-            guard let self else { return }
-            if hostID == HostGroups.localID { cachedShellPid = pid_t(info.pid) }
-            workingDirectory = info.directory
-            restoredAsNewShell = restarted
-            if restarted { connectionView.markRestart() }
-            objectWillChange.send()
+        if directLocal, let daemonIdentity {
+            Self.retireLegacyLocalSession(daemonIdentity)
         }
-        transport.onStateChange = { [weak self] state in
-            guard let self else { return }
-            connectionState = state
-            connectionView.update(state)
-            if state == .exited {
-                hasExited = true
-                if !isTerminating { onExited?(self) }
+
+        if let transport {
+            transport.onDirectory = { [weak self] path in self?.workingDirectory = path }
+            transport.onSession = { [weak self] info, restarted in
+                guard let self else { return }
+                if hostID == HostGroups.localID { cachedShellPid = pid_t(info.pid) }
+                workingDirectory = info.directory
+                restoredAsNewShell = restarted
+                objectWillChange.send()
             }
+            transport.onStateChange = { [weak self] state in
+                guard let self else { return }
+                connectionState = state
+                connectionView.update(state)
+                if state == .exited {
+                    hasExited = true
+                    if !isTerminating { onExited?(self) }
+                }
+            }
+            connectionView.translatesAutoresizingMaskIntoConstraints = false
+            surface.addSubview(connectionView, positioned: .above, relativeTo: nil)
+            NSLayoutConstraint.activate([
+                connectionView.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+                connectionView.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+                connectionView.topAnchor.constraint(equalTo: surface.topAnchor),
+                connectionView.bottomAnchor.constraint(equalTo: surface.bottomAnchor)
+            ])
+            connectionView.update(connectionState)
+        } else {
+            connectionState = .connected
         }
-        connectionView.translatesAutoresizingMaskIntoConstraints = false
-        surface.addSubview(connectionView, positioned: .above, relativeTo: nil)
-        NSLayoutConstraint.activate([
-            connectionView.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
-            connectionView.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
-            connectionView.topAnchor.constraint(equalTo: surface.topAnchor),
-            connectionView.bottomAnchor.constraint(equalTo: surface.bottomAnchor)
-        ])
-        connectionView.update(connectionState)
         surface.events = self
         imagePasteIndicator.style = .spinning
         imagePasteIndicator.isDisplayedWhenStopped = false
@@ -157,7 +184,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
             RemoteControlService.shared.reclaim(sessionID: self.id)
         }
         installOverlayScrollbar()
-        applyTheme()
         applyTheme()
         if hostID == HostGroups.localID { AgentAutomationMonitor.shared.register(self) }
     }
@@ -193,7 +219,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         let dark=NSApp.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua
         let settings=AppSettings.shared
         let cursor:UInt8 = [1,3,5][Int(settings.cursorShape.alacrittyValue)] + (settings.cursorBlinking ? 0:1)
-        transport.updateColors(Theme.protocolColors(dark:dark),cursorStyle:cursor)
+        transport?.updateColors(Theme.protocolColors(dark:dark),cursorStyle:cursor)
     }
 
     /// Keep the pane alive until the daemon acknowledges the explicit close.
@@ -201,32 +227,116 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         if hasExited { return true }
         guard !isTerminating else { return false }
         isTerminating = true
-        let success = await transport.terminate()
-        isTerminating = false
-        if success { hasExited = true; removeLaunchArtifacts() }
-        else {
-            let alert = NSAlert()
-            alert.messageText = "Could not confirm that the session ended"
-            alert.informativeText = "The operation was not retried. Reconnect to check the session before closing it again."
-            alert.runModal()
+        if let transport {
+            let success = await transport.terminate()
+            isTerminating = false
+            if success { hasExited = true; removeLaunchArtifacts() }
+            else {
+                let alert = NSAlert()
+                alert.messageText = "Could not confirm that the session ended"
+                alert.informativeText = "The operation was not retried. Reconnect to check the session before closing it again."
+                alert.runModal()
+            }
+            return success
         }
-        return success
+        teardownLocal(processAlive: true, notifyExit: false)
+        isTerminating = false
+        return true
+    }
+
+    /// Called after snapshotting on window close and app quit as well as by
+    /// explicit pane close. A direct PTY has no daemon to own its process.
+    func closeDirectLocal() {
+        guard isDirectLocal, !hasExited, !isTerminating else { return }
+        isTerminating = true
+        teardownLocal(processAlive: true, notifyExit: false)
+        isTerminating = false
+    }
+
+    private func teardownLocal(processAlive: Bool, notifyExit: Bool) {
+        if isRemotelyControlled { RemoteControlService.shared.reclaim(sessionID: id) }
+        surface.setSurfaceVisible(false)
+        surface.onBecomeFirstResponder = nil
+        surface.onTakeBackRemoteControl = nil
+        surface.splitTarget.onSplit = nil
+        surface.splitTarget.onNewBrowserTab = nil
+        surface.splitTarget.onNewBrowserPane = nil
+        surface.splitTarget.onNewFileTab = nil
+        surface.splitTarget.onNewFilePane = nil
+        if processAlive {
+            _ = shellPid
+            signalTerminalJob(SIGHUP)
+        }
+        surface.detach()
+        hasExited = true
+        removeLaunchArtifacts()
+        if notifyExit { onExited?(self) }
+    }
+
+    private func signalTerminalJob(_ signal: Int32) {
+        var pids = Set<pid_t>()
+        if let shellPid { pids.insert(shellPid) }
+        if let foreground = surface.foregroundProcessID, foreground > 0 {
+            pids.insert(foreground)
+        }
+        for pid in pids where pid > 1 {
+            // The foreground value is normally a process group ID. Never
+            // signal a group unless its leader is still that same process.
+            if Darwin.getpgid(pid) == pid {
+                _ = Darwin.kill(-pid, signal)
+            } else if Darwin.getpgid(pid) > 0 {
+                _ = Darwin.kill(pid, signal)
+            }
+        }
     }
 
     /// Window/group teardown detaches the connection without signalling the
     /// shell or marking it exited. Its identity remains in the saved layout.
     func detach() {
         if isRemotelyControlled { RemoteControlService.shared.reclaim(sessionID:id) }
-        transport.close()
-        surface.setSurfaceVisible(false)
+        transport?.close()
+        if transport != nil { surface.setSurfaceVisible(false) }
     }
 
-    func resume() { transport.resume() }
+    func resume() { transport?.resume() }
+
+    /// A restored local pane starts only when it enters the visible layout.
+    /// Background daemon panes remain attached without spawning replacements.
+    func activateSurfaceIfNeeded() {
+        guard let launch = pendingLocalLaunch else { return }
+        pendingLocalLaunch = nil
+        surface.startLocal(launch: launch)
+        applyTheme()
+    }
 
     private func removeLaunchArtifacts() {
         KeroCLIService.shared.revokeTerminal(id: id)
         guard let launchDirectoryURL else { return }
         try? FileManager.default.removeItem(at: launchDirectoryURL)
+    }
+
+    private static func retireLegacyLocalSession(_ identity: DaemonSessionIdentity) {
+        let namespace =
+            (Bundle.main.object(forInfoDictionaryKey: "KeroDaemonStateNamespace") as? String)
+            ?? (Bundle.main.bundleIdentifier?.hasPrefix("sh.kero.dev") == true ? "kero-dev" : "kero")
+        let socketPath = FileManager.default.homeDirectoryForCurrentUser.path
+            + "/.local/state/\(namespace)/daemon-v1/daemon.sock"
+        Task.detached(priority: .background) {
+            // Do not launch the old daemon just to clean up a stale snapshot.
+            guard FileManager.default.fileExists(atPath: socketPath) else { return }
+            guard let wire = try? DaemonWire(path: socketPath) else { return }
+            defer { wire.close() }
+            wire.setReadTimeout(3)
+            do {
+                try wire.request(["op": "hello", "version": 1])
+                guard try wire.event()["version"] as? Int == 1 else { return }
+                try wire.request(["op": "terminate", "key": try DaemonWire.object(identity)])
+                _ = try wire.event()
+            } catch {
+                // The old process may already have exited or its daemon may
+                // have restarted. The new direct PTY is independent of it.
+            }
+        }
     }
 
     /// Short label for the sidebar: the tail of the current directory, if known.
@@ -276,13 +386,13 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         guard !isRemotelyControlled else { return }
         isRemotelyControlled = true
         remoteOutputHandler = output
-        surface.beginRemoteControl(resize: resize, output: { _ in })
-        transport.beginRelay(resize,output:output)
+        surface.beginRemoteControl(resize: resize, output: transport == nil ? output : { _ in })
+        transport?.beginRelay(resize,output:output)
     }
 
     func endRemoteControl() {
         guard isRemotelyControlled else { return }
-        transport.endRelay()
+        transport?.endRelay()
         surface.endRemoteControl()
         remoteOutputHandler = nil
         isRemotelyControlled = false
@@ -290,17 +400,21 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
 
     func receiveRemoteInput(_ data: Data) {
         guard isRemotelyControlled else { return }
-        transport.send(data)
+        if let transport { transport.send(data) }
+        else { surface.receiveRemoteInput(data) }
     }
 
     func applyRemoteResize(_ resize: RemoteResize) {
         guard isRemotelyControlled else { return }
-        surface.beginRemoteControl(resize:resize,output:{ _ in })
-        transport.resizeRelay(resize)
+        surface.beginRemoteControl(
+            resize: resize, output: transport == nil ? (remoteOutputHandler ?? { _ in }) : { _ in }
+        )
+        transport?.resizeRelay(resize)
     }
 
     func remoteBootstrap() async -> Data? {
-        await transport.remoteBootstrap()
+        if let transport { return await transport.remoteBootstrap() }
+        return await surface.remoteBootstrap()
     }
 
     /// Clears the emulator's visible screen and scrollback, then asks the
@@ -382,9 +496,10 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     private struct LaunchArtifacts {
         let directoryURL: URL?
         let pidFileURL: URL?
+        let replayFileURL: URL?
     }
 
-    private static func makeLaunchArtifacts() -> LaunchArtifacts {
+    private static func makeLaunchArtifacts(restoredHistory: String?) -> LaunchArtifacts {
         let fileManager = FileManager.default
         let directory = fileManager.temporaryDirectory
             .appendingPathComponent("kero-terminal-\(UUID().uuidString)", isDirectory: true)
@@ -395,14 +510,28 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
                 attributes: [.posixPermissions: 0o700]
             )
             let pidFile = directory.appendingPathComponent("shell.pid")
+            var replayFile: URL?
+            if AppSettings.shared.restoreTerminalHistory,
+               let restoredHistory, !restoredHistory.isEmpty {
+                let file = directory.appendingPathComponent("history.vt")
+                let separator = restoredHistory.hasSuffix("\n") ? "" : "\r\n"
+                let contents = restoredHistory + separator
+                    + TerminalHistorySerializer.restoredBanner() + "\r\n"
+                try Data(contents.utf8).write(to: file, options: .atomic)
+                try fileManager.setAttributes(
+                    [.posixPermissions: 0o600], ofItemAtPath: file.path
+                )
+                replayFile = file
+            }
             return LaunchArtifacts(
                 directoryURL: directory,
-                pidFileURL: pidFile
+                pidFileURL: pidFile,
+                replayFileURL: replayFile
             )
         } catch {
             try? fileManager.removeItem(at: directory)
             NSLog("kero: failed to prepare terminal launch files: \(error)")
-            return LaunchArtifacts(directoryURL: nil, pidFileURL: nil)
+            return LaunchArtifacts(directoryURL: nil, pidFileURL: nil, replayFileURL: nil)
         }
     }
 
@@ -413,7 +542,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         backend: TerminalBackend,
         shellPath: String,
         commandArguments: [String]?,
-        pidFileURL: URL?
+        pidFileURL: URL?,
+        replayFileURL: URL?
     ) -> String {
         var commands: [String] = []
         if let pidFileURL {
@@ -427,7 +557,12 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
                 "(umask 077; printf '%s\\n' \"$$\" > \(shellQuote(pidFileURL.path)))"
             )
         }
-        // Legacy history is seeded by the daemon once, never replayed by a shell.
+        if let replayFileURL {
+            let path = shellQuote(replayFileURL.path)
+            commands.append("if [ -r \(path) ]; then /bin/cat \(path); /bin/rm -f \(path); fi")
+        }
+        // Daemon sessions seed history themselves. Direct local sessions only
+        // replay the bounded sidecar history into a newly started shell.
         // KERO_TERM exposes the actual surface. TERM_PROGRAM remains a
         // capability hint so tools select protocols Kero can actually render.
         commands.append("export KERO_TERM=\(shellQuote(backend.environmentName))")
@@ -535,8 +670,16 @@ extension TerminalSession: TerminalBackendEvents {
     }
 
     func terminalDidClose(processAlive: Bool) {
-        // Renderers own no shell. Only the daemon's exit event can remove a pane.
-        detach()
+        if transport != nil {
+            // A daemon pane ends only when its authoritative exit event arrives.
+            detach()
+        } else if !hasExited && !isTerminating {
+            isTerminating = true
+            Task { @MainActor [self] in
+                teardownLocal(processAlive: processAlive, notifyExit: true)
+                isTerminating = false
+            }
+        }
     }
 
     func terminalDidRequestDesktopNotification(title: String, body: String) {
@@ -702,7 +845,7 @@ extension TerminalSession: TerminalBackendEvents {
                 guard !Task.isCancelled, isConnected, !isRemotelyControlled,
                       daemonIdentity == key, surface.window != nil,
                       HostGroups.shared.isExpanded(hostID), HostGroups.shared.service(hostID) === service else { return }
-                transport.pasteImagePath(path)
+                transport?.pasteImagePath(path)
             } catch {
                 guard let self else { return }
                 imagePasteTask = nil

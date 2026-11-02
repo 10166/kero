@@ -1,0 +1,44 @@
+diff --git a/build.zig b/build.zig
+--- a/build.zig
++++ b/build.zig
+@@ -127,18 +127,18 @@
+             &mod,
+         );
+     };
+-    libghostty_vt_shared.install(b.getInstallStep());
++    if (config.emit_lib_vt) libghostty_vt_shared.install(b.getInstallStep());
+ 
+     // libghostty-vt static lib
+     const libghostty_vt_static = try buildpkg.GhosttyLibVt.initStatic(
+         b,
+         &mod,
+     );
+-    if (config.is_dep) {
++    if (config.emit_lib_vt and config.is_dep) {
+         // If we're a dependency, we need to install everything as-is
+         // so that dep.artifact("ghostty-vt-static") works.
+         libghostty_vt_static.install(b.getInstallStep());
+-    } else {
++    } else if (config.emit_lib_vt) {
+         // If we're not a dependency, we rename the static lib to
+         // be idiomatic. On Windows, we use a distinct name to avoid
+         // colliding with the DLL import library (ghostty-vt.lib).
+diff --git a/src/build/LibtoolStep.zig b/src/build/LibtoolStep.zig
+--- a/src/build/LibtoolStep.zig
++++ b/src/build/LibtoolStep.zig
+@@ -31,6 +31,7 @@
+     const self = b.allocator.create(LibtoolStep) catch @panic("OOM");
+ 
+     const run_step = RunStep.create(b, b.fmt("libtool {s}", .{opts.name}));
++    if (b.graph.env_map.get("KERO_METAL_DEVELOPER_DIR")) |developer| run_step.setEnvironmentVariable("DEVELOPER_DIR", developer);
+     run_step.addArgs(&.{ "libtool", "-static", "-o" });
+     const output = run_step.addOutputFileArg(opts.out_name);
+     for (opts.sources, 0..) |source, i| {
+@@ -67,6 +68,7 @@
+         b,
+         b.fmt("ranlib {s} #{d}", .{ step_name, index }),
+     );
++    if (b.graph.env_map.get("KERO_METAL_DEVELOPER_DIR")) |developer| run_step.setEnvironmentVariable("DEVELOPER_DIR", developer);
+     run_step.addArgs(&.{
+         "/bin/sh",
+         "-c",

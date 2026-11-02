@@ -28,6 +28,7 @@ struct TerminalHostView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let container = TerminalContainerView()
         container.terminal = session.surface
+        container.session = session
         container.focusOnAppear = isFocused
         let terminal = session.surface
         terminal.onBecomeFirstResponder = onFocused
@@ -74,6 +75,7 @@ struct TerminalHostView: NSViewRepresentable {
         session.surface.splitTarget.onNewFileTab = onNewFileTab
         session.surface.splitTarget.onNewFilePane = onNewFilePane
         let container = view as? TerminalContainerView
+        container?.session = session
         container?.activateSurfaceAfterLayout()
         container?.focusOnAppear = isFocused
         // Take focus only on the unfocused→focused edge (keyboard navigation,
@@ -101,6 +103,7 @@ struct TerminalHostView: NSViewRepresentable {
         terminal.splitTarget.onNewFileTab = nil
         terminal.splitTarget.onNewFilePane = nil
         container.terminal = nil
+        container.session = nil
     }
 
     final class Coordinator {
@@ -189,6 +192,7 @@ final class TerminalParkingContainerView: NSView {
 /// this only performs the makeFirstResponder.
 private final class TerminalContainerView: NSView {
     weak var terminal: NSView?
+    weak var session: TerminalSession?
     var focusOnAppear = true {
         didSet {
             if !focusOnAppear { pendingFocusRequest = false }
@@ -238,6 +242,7 @@ private final class TerminalContainerView: NSView {
               terminal.bounds.width > 0, terminal.bounds.height > 0
         else { return }
         needsSurfaceActivation = false
+        session?.activateSurfaceIfNeeded()
         terminal.setSurfaceVisible(true)
     }
 

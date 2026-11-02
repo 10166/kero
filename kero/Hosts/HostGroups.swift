@@ -73,15 +73,8 @@ final class HostGroups: ObservableObject {
     func service(_ id: UUID) -> HostService {
         if let value = services[id] { return value }
         let socket: String?
-        if !isExpanded(id) {
+        if id == Self.localID || !isExpanded(id) {
             socket = nil
-        } else if id == Self.localID {
-            let namespace =
-                (Bundle.main.object(forInfoDictionaryKey: "KeroDaemonStateNamespace") as? String)
-                ?? (Bundle.main.bundleIdentifier?.hasPrefix("sh.kero.dev") == true ? "kero-dev" : "kero")
-            socket =
-                FileManager.default.homeDirectoryForCurrentUser.path
-                + "/.local/state/\(namespace)/daemon-v1/daemon.sock"
         } else {
             socket = connections[id]?.socketPath
         }

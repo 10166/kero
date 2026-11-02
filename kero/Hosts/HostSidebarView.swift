@@ -38,6 +38,8 @@ final class HostSidebarView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
     private var observations = Set<AnyCancellable>()
     private var isReloading = false
     private var lastSnapshot = ""
+    /// Row IDs per host as last handed to `reloadData()`; see `reload()`.
+    private var lastShape: [[UUID]] = []
     private let settings: () -> Void
     private let dragType = NSPasteboard.PasteboardType("sh.kero.project")
     private let hostDragType = NSPasteboard.PasteboardType("sh.kero.sshHost")
@@ -206,17 +208,35 @@ final class HostSidebarView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
             }
             roots.append(node)
         }
-        let live = Set(roots.flatMap { [$0.id] + $0.children.map(\.id) })
+        let shape = roots.map { [$0.id] + $0.children.map(\.id) }
+        let live = Set(shape.joined())
         rows = rows.filter { live.contains($0.key) }
-        outline.reloadData()
-        for root in roots {
+        // Project titles follow their terminal's title, which coding agents
+        // rewrite several times a second. On macOS 27, every reloadData()
+        // leaks one disclosure button per expandable row along with its
+        // notification observers, and each later view deallocation scans that
+        // growing registry until the app stalls. Only reload when rows appear,
+        // disappear, or move; titles, connection status, expansion, and
+        // selection update the rows in place.
+        if shape != lastShape {
+            lastShape = shape
+            outline.reloadData()
+        } else {
+            outline.enumerateAvailableRowViews { rowView, index in
+                guard let row = outline.item(atRow: index) as? Row,
+                    let cell = rowView.view(atColumn: 0) as? NSTableCellView
+                else { return }
+                configure(cell, for: row)
+            }
+        }
+        for root in roots where outline.isItemExpanded(root) != HostGroups.shared.isExpanded(root.id) {
             if HostGroups.shared.isExpanded(root.id) { outline.expandItem(root) }
             else { outline.collapseItem(root) }
         }
         let selected = manager.selectedRemoteProject?.projectID ?? manager.selectedProjectID
         if let selected, let item = rows[selected] {
             let index = outline.row(forItem: item)
-            if index >= 0 {
+            if index >= 0, index != outline.selectedRow {
                 outline.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             }
         }
@@ -272,13 +292,25 @@ final class HostSidebarView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
                 status.heightAnchor.constraint(equalToConstant: 12),
             ])
         }
-        cell.textField?.font = .systemFont(ofSize: AppSettings.shared.sidebarFontSize)
-        cell.textField?.stringValue = row.title
-        let symbol =
-            row.kind == "local"
-            ? "laptopcomputer"
-            : row.kind == "ssh" ? "network" : row.kind == "relay" ? "desktopcomputer" : "folder"
-        cell.imageView?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        configure(cell, for: row)
+        return cell
+    }
+    /// Row icons are shared instances so an in-place refresh recognizes an
+    /// unchanged icon by identity instead of redrawing it.
+    private static let icons: [String: NSImage] = [
+        "local": "laptopcomputer", "ssh": "network", "relay": "desktopcomputer",
+    ].compactMapValues { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+    private static let folderIcon = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+    /// Also runs for every on-screen row on each terminal title change, so
+    /// unchanged values are left alone rather than re-laid out and redrawn.
+    private func configure(_ cell: NSTableCellView, for row: Row) {
+        let fontSize = CGFloat(AppSettings.shared.sidebarFontSize)
+        if cell.textField?.font?.pointSize != fontSize {
+            cell.textField?.font = .systemFont(ofSize: fontSize)
+        }
+        if cell.textField?.stringValue != row.title { cell.textField?.stringValue = row.title }
+        let icon = Self.icons[row.kind] ?? Self.folderIcon
+        if cell.imageView?.image !== icon { cell.imageView?.image = icon }
         let status = cell.subviews.compactMap { $0 as? HostStatusIndicator }.first
         if row.kind == "ssh" {
             let connection = HostGroups.shared.connection(row.id)
@@ -290,12 +322,11 @@ final class HostSidebarView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
                 + failure.message.split(separator: "\n", omittingEmptySubsequences: true)
                     .prefix(1).joined()
             }
-            cell.toolTip = tooltip
+            if cell.toolTip != tooltip { cell.toolTip = tooltip }
         } else {
             status?.configure(state: nil, failure: nil)
-            cell.toolTip = row.title
+            if cell.toolTip != row.title { cell.toolTip = row.title }
         }
-        return cell
     }
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !isReloading, let row = outline.item(atRow: outline.selectedRow) as? Row else { return }
@@ -609,11 +640,18 @@ private final class HostStatusIndicator: NSView {
             symbol = "exclamationmark.triangle.fill"
             color = .systemRed
             label = String(localized: "Failed")
-        case .disconnected, nil:
+        case .disconnected:
             isWorking = false
             symbol = "circle.fill"
             color = .quaternaryLabelColor
             label = String(localized: "Disconnected")
+        case nil:
+            // Local projects use a direct PTY, so they have no host
+            // connection state to display.
+            isWorking = false
+            symbol = nil
+            color = nil
+            label = ""
         }
         image.isHidden = symbol == nil
         image.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: label) }

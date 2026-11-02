@@ -30,6 +30,7 @@ final class FileTreeModel: nonisolated ObservableObject {
     deinit { watcher?.cancel();watchTask?.cancel();refreshTask?.cancel() }
     var onCreated: ((String)->Void)?
     var onRenamed: ((String,String)->Void)?
+    var onChanged: (() -> Void)?
     var rootName: String { (rootPath as NSString).lastPathComponent }
     func isExpanded(_ item:Item)->Bool { expanded.contains(item.path) }
     func sync(root:String,hostID:UUID = HostGroups.localID) {
@@ -46,8 +47,8 @@ final class FileTreeModel: nonisolated ObservableObject {
     func toggle(_ item:Item) { guard item.isDirectory else{return}; if !expanded.insert(item.path).inserted {expanded.remove(item.path)}; rebuild() }
     func beginRename(_ item:Item){renamingPath=item.path}
     func cancelRename(){renamingPath=nil}
-    func beginNewFile(in directory:String){draft=Draft(parentDir:directory,isDirectory:false)}
-    func beginNewFolder(in directory:String){draft=Draft(parentDir:directory,isDirectory:true)}
+    func beginNewFile(in directory:String){renamingPath=nil;expanded.insert(directory);draft=Draft(parentDir:directory,isDirectory:false);rebuild()}
+    func beginNewFolder(in directory:String){renamingPath=nil;expanded.insert(directory);draft=Draft(parentDir:directory,isDirectory:true);rebuild()}
     func cancelDraft(){draft=nil}
     private func valid(_ name:String)->String? {
         let name=name.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -80,6 +81,7 @@ final class FileTreeModel: nonisolated ObservableObject {
                 }.value
                 guard let self, self.generation == generation else { return }
                 if let failure { let alert=NSAlert(); alert.messageText="Could not move item to Trash"; alert.informativeText=failure; alert.runModal() }
+                if failure == nil { self.onChanged?() }
                 self.rebuild()
             }
             return
@@ -102,7 +104,7 @@ final class FileTreeModel: nonisolated ObservableObject {
             }.value
             guard let self,self.generation==generation else{return}
             if let failure {self.error=failure;let alert=NSAlert();alert.messageText="File operation failed";alert.informativeText=failure;alert.runModal()}
-            else {completion()}; self.rebuild()
+            else {completion(); self.onChanged?()}; self.rebuild()
         }
     }
     func refresh() { rebuild() }

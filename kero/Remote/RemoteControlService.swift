@@ -56,7 +56,9 @@ final class RemoteControlService: ObservableObject {
     private init() {}
 
     func start() {
-        guard api == nil else { return }
+        // A local workspace never needs a device identity. Keychain access can
+        // wait for user approval, so keep it off the path that opens a window.
+        guard api == nil, validatedRelayURL != nil else { return }
         do {
             identity = try RemoteDeviceIdentity.loadOrCreate()
         } catch {
@@ -67,12 +69,17 @@ final class RemoteControlService: ObservableObject {
     }
 
     func settingsDidChange() {
+        if identity == nil {
+            start()
+            return
+        }
         guard api != nil || !AppSettings.shared.remoteRelayURL.isEmpty else { return }
         disconnect(keepSession: true)
         restoreSessionAndConnect()
     }
 
     func signIn() async {
+        if identity == nil { start() }
         guard let relayURL = validatedRelayURL else {
             state = .failed(String(localized: "Enter a valid relay URL first."))
             return

@@ -6,8 +6,8 @@
 import Foundation
 
 /// Snapshot of open projects and tabs, saved so a relaunch restores the
-/// previous layout. Live daemon identities reattach the original processes;
-/// a replacement daemon starts fresh shells and restores bounded history.
+/// previous layout. Live SSH daemon identities reattach the original processes;
+/// local panes start fresh direct shells and may restore bounded history.
 /// Legacy history keys remain readable for migration. Dirty file/diff drafts
 /// preserve their baseline so a later save still detects external changes.
 struct EditorDraft: Codable {

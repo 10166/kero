@@ -17,8 +17,9 @@ import GhosttyTheme
 extension KeroTerminalView {
     // MARK: - Lifecycle
 
+    func startLocal(launch: TerminalLaunch) { start(launch: launch) }
+
     func start(launch: TerminalLaunch) {
-        launchCommand = launch.commandLine
         guard let ptyAdapter = AlacrittyPTYAdapter(launch: launch) else {
             NSLog("kero: failed to start host-managed Ghostty PTY")
             return
@@ -33,10 +34,12 @@ extension KeroTerminalView {
             }
         )
         inMemorySession = session
+        // The PTY adapter launches the shell. Ghostty only renders its bytes,
+        // so its config must not include a second shell command.
         let controller = TerminalController(
             configSource: .none,
             theme: Self.ghosttyTheme(),
-            terminalConfiguration: Self.terminalConfiguration(command: launch.commandLine)
+            terminalConfiguration: Self.terminalConfiguration()
         )
         ghosttyController = controller
         delegate = self
@@ -86,7 +89,7 @@ extension KeroTerminalView {
         let controller = TerminalController(
             configSource: .none,
             theme: Self.ghosttyTheme(),
-            terminalConfiguration: Self.terminalConfiguration(command: "", remote: true)
+            terminalConfiguration: Self.terminalConfiguration(remote: true)
         )
         ghosttyController = controller
         delegate = self
@@ -108,7 +111,7 @@ extension KeroTerminalView {
     func applyAppearance() {
         guard let ghosttyController else { return }
         _ = ghosttyController.setTerminalConfiguration(
-            Self.terminalConfiguration(command: launchCommand, remote: isRemoteRenderer)
+            Self.terminalConfiguration(remote: isRemoteRenderer)
         )
         _ = ghosttyController.setTheme(Self.ghosttyTheme())
         let isDark = NSApp.effectiveAppearance.bestMatch(
@@ -177,10 +180,7 @@ extension KeroTerminalView {
 
     // MARK: - Configuration
 
-    private static func terminalConfiguration(
-        command: String,
-        remote: Bool = false
-    ) -> TerminalConfiguration {
+    private static func terminalConfiguration(remote: Bool = false) -> TerminalConfiguration {
         let settings = AppSettings.shared
         let family = settings.fontFamily.isEmpty
             ? TerminalFont.bundledFamily : settings.fontFamily
@@ -233,9 +233,6 @@ extension KeroTerminalView {
             ] {
                 builder.withCustom("keybind", keybind)
             }
-            if !command.isEmpty {
-                builder.withCustom("command", "shell:\(command)")
-            }
             builder.withCustom("term", "xterm-256color")
             builder.withCustom("shell-integration", "none")
             // The previous backend retained 500 rows. Ghostty budgets bytes
@@ -251,6 +248,10 @@ extension KeroTerminalView {
                 settings.macosOptionAsAlt ? "true" : "false"
             )
             builder.withCustom("scrollbar", "never")
+            // Kero uses Shift internally to start a native selection when a
+            // mouse-reporting TUI receives a drag. Do not let that TUI reclaim
+            // Shift through XTSHIFTESCAPE.
+            builder.withCustom("mouse-shift-capture", "never")
             // Terminal-program clipboard access via OSC 52, matching the
             // Ghostty app defaults: reads prompt the user per request
             // (TerminalSession presents the confirmation sheet), writes
@@ -264,8 +265,13 @@ extension KeroTerminalView {
             // host-initiated and stay prompt-free (unless an unsafe paste
             // trips protection).
             builder.withCustom("clipboard-read", remote ? "deny" : "ask")
-            builder.withCustom("kero-renderer-only", remote ? "true" : "false")
-            builder.withCustom("clipboard-write", remote ? "deny" : "allow")
+            // This option exists only in Kero's patched Ghostty library.
+            // Local PTYs own their protocol replies and need no override.
+            if remote { builder.withCustom("kero-renderer-only", "true") }
+            // OSC 52 writes carry the terminal's selected text to the local
+            // clipboard. A remote renderer still needs these for tmux and
+            // coding agents; only clipboard reads expose local contents.
+            builder.withCustom("clipboard-write", "allow")
             builder.withCustom("clipboard-paste-protection", remote ? "false" : "true")
         }
     }

@@ -120,6 +120,17 @@ enum TerminalBackend: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Restored local panes outside the selected tab hold an inert surface
+    /// until first shown. Their old jobs ended with the previous app instance.
+    @MainActor
+    func makeDeferredLocalSurface() -> any TerminalBackendSurface {
+        let frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        switch self {
+        case .libghostty: return KeroTerminalView(frame: frame)
+        case .alacritty: return AlacrittyTerminalView(frame: frame)
+        }
+    }
+
     @MainActor
     func makeRemoteSurface(
         connection: any TerminalTransport
@@ -201,6 +212,9 @@ protocol TerminalBackendSurface: NSView {
     /// itself outlives this call so teardown never pulls a pane out from
     /// under the layout mid-frame.
     func detach()
+
+    /// Starts a previously deferred local PTY in this existing surface.
+    func startLocal(launch: TerminalLaunch)
 
     func sendText(_ text: String)
 

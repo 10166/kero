@@ -26,13 +26,17 @@ PY
 # git apply is required for the binary framedata patch; BSD patch silently
 # skips that payload in a source archive without a Git directory.
 git init --quiet "$cache/ghostty-$revision"
+"$root/Vendor/libghostty-spm/Script/apply-patches.sh" "$cache/ghostty-$revision"
+git -C "$cache/ghostty-$revision" apply "$root/patches/ghostty-macos-build-compat.patch"
 export KERO_METAL_DEVELOPER_DIR="${KERO_METAL_DEVELOPER_DIR:-$(xcode-select -p)}"
 if [[ -n "${KERO_ZIG_DEVELOPER_DIR:-}" ]]; then
   export DEVELOPER_DIR="$KERO_ZIG_DEVELOPER_DIR"
   export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 fi
 for architecture in aarch64 x86_64; do
-  "$root/Vendor/libghostty-spm/Script/build-ghostty.sh" "$cache/ghostty-$revision" "$architecture-macos" "$cache/$architecture"
+  # Pin the deployment version: on newer macOS SDKs Zig otherwise targets the
+  # host OS and fails to link the build runner against that SDK's libc stubs.
+  "$root/Vendor/libghostty-spm/Script/build-ghostty.sh" "$cache/ghostty-$revision" "$architecture-macos.15.6" "$cache/$architecture"
 done
 mkdir -p "$cache/universal"
 lipo -create "$cache/aarch64/lib/libghostty.a" "$cache/x86_64/lib/libghostty.a" -output "$cache/universal/libghostty.a"
