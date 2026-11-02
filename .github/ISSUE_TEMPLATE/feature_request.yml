@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest something Kero should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The workflow or problem behind the request, such as how you run your agents today and where Kero gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What you'd like
+      description: How you picture it working. A CLI command, a shortcut, a setting, a change in the sidebar…
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds you use now, or how other terminals and multiplexers handle it.

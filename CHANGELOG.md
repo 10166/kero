@@ -1,249 +1,548 @@
 # Changelog
 
-All notable changes to kero. This file is the **source of truth for the release
-notes shown in the in-app updater**: [`scripts/release.ts`](scripts/release.ts)
-extracts the section whose heading matches the version being released
-(`MARKETING_VERSION`) and publishes it next to the update, so Sparkle shows it in
-the update prompt.
-
-Format follows [Keep a Changelog](https://keepachangelog.com). Add a new
-`## [<version>]` section at the top for each release, matching the version you
-set in the Xcode project.
-
-Write release notes for the final product users receive, not the development
-history. When a feature is still unreleased, fold its fixes and refinements into
-the original feature bullet instead of adding separate entries for them.
-
-## [0.1.49]
-
-- Run local and SSH terminal sessions in a bundled daemon so shells survive disconnects, app restarts, and daemon restarts; Kero becomes the renderer and client while the daemon preserves terminal state and serves files, Git, and remote services
-
-## [0.1.48]
-
-- Control terminal sessions from another Kero through a self-hosted, Google-authenticated relay, with end-to-end encrypted byte-transparent I/O, mirrored projects/tabs/splits, exclusive control, device revocation, and immediate local take-back
-
-## [0.1.47]
-
-- Let dictation and other accessibility tools enter text in terminal panes
-- Choose a block, bar, or underline terminal cursor, with or without blinking
-- Respect the selected System, Light, or Dark appearance when Kero launches
-- Stop inferring coding-agent progress from terminal text, preventing false Working, Blocked, and Done states from ordinary terminal output
-
-## [0.1.46]
-
-- Fix new terminal panes failing to start a shell after hours of coding-agent use: the Ghostty backend's screen exports leaked two file descriptors each, exhausting the process descriptor table
-
-## [0.1.45]
-
-- Automate project-scoped panes and coding agents from Kero terminals with guarded `+pane` and `+agent` commands, one-click AI setup, semantic status badges, completion notifications, and attention navigation
-
-## [0.1.44]
-
-- Prevent a rare crash while using the Ctrl-Tab switcher
-
-## [0.1.43]
-
-- Command-click local file paths in the terminal to reveal them in Finder, or Command-right-click paths and URLs to open them in new file or browser tabs and panes
-- Alacritty terminal panes now move the mouse pointer the way Ghostty panes do: programs can set shapes with OSC 22, mouse-reporting apps show the arrow, and a terminal reset restores the text cursor
-
-## [0.1.42]
-
-- Drag a tab onto the current tab's content to turn it into a split pane
-
-## [0.1.41]
-
-- Fix diff controls and content sometimes using the wrong appearance when Kero follows the system theme
-
-## [0.1.40]
-
-- Edit live worktree changes directly in the diff view, with remembered Review/Edit and Unified/Split controls plus normal save/discard handling
-- Fix modified special keys and application-keypad input in Alacritty terminals, including Shift-Enter for multiline prompts in Claude Code
-- Fix: Show a green Clean status for unchanged repositories and include untracked files in the toolbar's added-line count
-- Clicking a terminal notification activates Kero and jumps to the session that posted it
-- Fix desktop notifications from Grok and other OSC 777 clients when using the Alacritty terminal backend
-- Close all open files or diffs from the tab bar context menu
-- Improve the Recent Commits view in git panel
-- Show filename-aware Material icons across file trees, Git file lists, tabs, panes, previews, and file search
-
-## [0.1.39]
-
-- Show the active Git branch and aggregate added/deleted line counts in a toolbar below the active tab, with searchable branch switching, quick access to changed-file diffs, and a setting to show or hide the toolbar (hidden by default)
-- Register sound for terminal notifications so System Settings shows Play sound and alerts can chime, including for installs that already allowed notifications
-
-## [0.1.38]
-
-- Terminal notifications play the system sound
-- Browser tabs now use a modern Safari user agent, fixing sites such as Bilibili that otherwise report an outdated browser
-
-## [0.1.37]
-
-- Keep the left sidebar toggle available in the main header while the sidebar is hidden
-- Adjust sidebar project typography scaling
-
-## [0.1.36]
-
-- The Files panel now shows repository status with colored filenames and badges, including dimmed Git-ignored files
-- Switch directly to tabs with Ctrl+1–9, without also holding Shift
-
-## [0.1.35]
-
-- Add per-pane live titles and split controls in split layouts
-- Splitting a pane now divides only the focused pane, preserving the size of neighboring panes in nested layouts
-- The Ctrl-Tab switcher now lists tabs in the order you last used them and opens already pointing at the previous tab, so a quick Ctrl-Tab flips between the two tabs you're working in
-
-## [0.1.34]
-
-- Show terminal titles verbatim while keeping sidebar project rows stable as titles update or hover controls appear
-- Follow the terminal's foreground job into another checkout: when an agent
-  switches to its own git worktree, Files, Git and Info re-root to it
-- Settings font preview now reflects “Thicken font strokes”
-- Prevent terminal tabs from crashing after switching sessions or resizing during a partial redraw
-- Files created in a terminal now use your system's default permissions instead of being made private to your user
-
-## [0.1.33]
-
-- Fix: never set `LANG` env for the terminal session
-
-## [0.1.32]
-
-- Add native English, Simplified Chinese, and Japanese localization throughout the app, with a language picker in Settings
-- Search and open files from the project directory in the command palette
-- Open native browser tabs and split panes from the command palette or terminal/editor context menus, with a combined address/search field, navigation controls, page sharing, and restored URLs
-
-## [0.1.31]
-
-- File previews now refresh after files are changed outside Kero
-- Option-key characters from macOS input sources such as Polish Pro now work in terminals; users who prefer terminal Meta bindings can opt in under Settings → Terminal
-
-## [0.1.30]
-
-- Fix Chinese IME under Alacritty backend
-- Reduce hidden Ghostty tab renderer memory
-
-## [0.1.29]
-
-- Add `kero` command: run `kero` in any Kero terminal to create a project in the current directory, optionally with an argv to run directly (`kero vim ~/foo.js`); `kero +themes` browses themes with a live app-wide preview and saves the selection on Return
-- The Git panel now refreshes after commands and when Kero regains focus instead of polling continuously in the background
-
-## [0.1.28]
-
-- Tweak some UI colors
-
-## [0.1.27]
-
-- Choose which terminal emulator drives new panes in Settings → Terminal → Backend. Ghostty remains the default, with a new Alacritty backend
-- Configure the left and right sidebar font size in Settings
-
-## [0.1.26]
-
-- Opening the Ctrl-Tab switcher no longer highlights whichever tab happens to be under the stationary pointer
-- The Processes list no longer shows `<defunct>` entries: those are exited children waiting to be reaped, not something you can see output from or kill
-- Opening a large diff no longer freezes the window: diffs render only the rows on screen and highlight them off the main thread
-- The font setting now applies to the diff viewer too, so diffs match the terminal and the editor
-- Sessions you never open no longer cost any GPU memory. Reopening a window used to draw every restored session straight away, holding a full-size buffer for each whether you looked at it or not; now a pane claims one only when you first view it, and claims one buffer less than before. A pane you have already viewed keeps its buffer until you close it — switching away stops it drawing, but does not hand the memory back.
-
-## [0.1.25]
-
-- Add a tab switcher (ctrl-tab) to switch between tabs
-- Add audio input support for CLIs that might need it
-
-## [0.1.24]
-
-- set TERM_PROGRAM to ghostty to get image rendering support
-
-## [0.1.23]
-
-- Fix pasting clipboard images into image-aware TUIs such as Grok, and paste Finder-copied files as shell-safe absolute paths (#20)
-
-## [0.1.22]
-
-- Add “Open in Kero” to Finder’s folder context menu, opening each selected folder as a project with its terminal started there
-- Full-screen programs with their own background color (vim, htop, TUIs) now fill the terminal pane: the padding around the grid takes on the adjacent content's background instead of always showing the theme background, leaving only a hairline frame at the pane edges
-- Fix non-ASCII rendering in git diff view
-- Allow to rename session tabs
-
-## [0.1.21]
-
-- Anchor the file tree and Git panel to the project directory — the closest git repository containing the terminal's directory — so they no longer re-root every time you `cd` inside a repo; outside a repository they keep following the terminal as before
-- Add "Set Project Directory…" to the project's context menu to pin a fixed directory for these panels ("Use Automatic Directory" reverts); the pin is remembered across relaunches
-- Info panel: the Directory section is now split into Current Directory (the shell's live cwd, shown when it differs) and Project Directory, marked "(AUTO)" while derived automatically, with a "?" popover explaining both modes
-- Remember sidebar layout across relaunches: each window restores whether the left and right sidebars were open and which right panel (Files/Git/Info) was selected
-
-## [0.1.20]
-
-- Security: stop terminal programs from silently reading your clipboard — an OSC 52 escape sequence (for example from a remote SSH host) could previously read the macOS clipboard without any prompt; kero now asks for confirmation first, matching the Ghostty app default (#8)
-- Warn before pasting text that looks like it could execute commands, matching Ghostty's paste protection
-- Add color themes: Settings → Colors picks a theme per appearance — kero's Default Light/Dark plus all 485 bundled Ghostty themes — recoloring the terminal, window chrome, sidebars, and editor live. The built-in Defaults keep the GitHub palette and translucent sidebar; every other theme colors the sidebar too
-- Fix fuzzy-looking terminal text: font thickening was unintentionally always on, making glyphs heavier and softer than stock Ghostty
-- Add a "Thicken font strokes" toggle in Settings → Font for those who prefer the heavier rendering
-
-## [0.1.19]
-
-- Fix a releasing signing issue
-
-## [0.1.18]
-
-- Fix max height of settings window
-
-## [0.1.17]
-
-- Add pane zoom: ⇧⌘↩ toggles the focused pane filling the tab, with a header button indicating the state and exiting zoom
-- Add shortcuts to cycle pane focus (⌘[ / ⌘]), resize panes (⌃⌘ arrows) and equalize panes (⌃⌘=)
-
-## [0.1.16]
-
-- Tweaks shortcut description for toggling right sidebar
-
-## [0.1.15]
-
-- Fix potential memory leak
-
-## [0.1.14]
-
-- Add theme setting to force light or dark theme
-
-## [0.1.13]
-
-- Make editor full height
-- Tweaks sidebar
-
-## [0.1.12]
-
-- Fix TSX highlight
-
-## [0.1.10]
-
-- fix git panel
-
-## [0.1.9]
-
-- Fix CPU usage spike due to libghostty intergration bug
-
-## [0.1.8]
-
-- Use libghostty
-
-## [0.1.7]
-
-- Remove GPU rendering temporarily
-
-## [0.1.6]
-
-- Fix window maximizing
-- Shortcut for left sidebar: cmd-b
-
-## [0.1.5]
-
-- Double-click the title bar to zoom the window (honors the system "double-click a window's title bar to" setting)
-- fix gpu rendering
-
-## [0.1.4]
-
-- Add "Session Contents Restored" divider to restored terminals
-- set TERM_PROGRAM to Kero
-- fix embedded language highlighting in markdown
-
-## [0.1]
-
-### Added
-- Initial release.
+## 2.1.31
+
+- The terminal's scroll bar looks as the lists' and the viewer's do: as
+  wide, as faint, showing while the pointer is over the terminal rather
+  than as it scrolls. The viewer's and the diffs' scroll bars take the
+  lists' color too.
+- Lines of a diff wider than the viewer come with a scroll bar at the
+  bottom of the part of the diff in view, on each side of a split diff.
+
+## 2.1.30
+
+- In a window too narrow for the right sidebar beside the cards, the
+  sidebar gets out of their way and comes back as you widen the window,
+  and its button at the top right stays to show it when you want it. A
+  viewer in a window that narrow shares the room with the panes instead
+  of running under the sidebar.
+- The viewer kept the last frame's width as the window resized, shaking
+  its edge and its text: it takes this frame's now.
+
+## 2.1.29
+
+- The right sidebar has a **Files** tab beside Changes: the pane's
+  worktree, or its folder outside a git repository, with what git
+  ignores faded and `.git` hidden, and a click opens the file beside
+  the panes. **Toggle Files** (⌥⌘E) shows it.
+- Files open in the viewer to edit, and <kbd>⌘</kbd> <kbd>S</kbd> saves
+  them. A dot in place of the close button marks edits not saved yet,
+  which closing the viewer or opening another file asks about first, as
+  does saving a file that changed on disk since it was read. Unsaved
+  edits and the files open in the viewer come back after a quit.
+- **New File…** and **New Folder…** above the tree, and **Rename…** and
+  **Delete…** in a file's or a folder's menu. A name with slashes makes
+  the folders in it. Deleting asks first, and moves this machine's files
+  to the Trash; a host has no trash, so its files go for good.
+- Files and folders in the Files and Changes trees show their icons,
+  and a changed file its letter at the right of its row.
+- The file viewer's scroll bar shows only while the pointer is over the
+  text or dragging it.
+- A file copied in Finder, or an image copied with its file, pastes as
+  its path, as a drop of it sends, instead of nothing.
+- On Windows and Linux, the minimize, maximize and close buttons stay in
+  the window's corner as the right sidebar comes and goes, instead of
+  sliding off the window's edge with it.
+- The right sidebar's edge takes the pointer on either side of it, so it
+  drags as it did not. A window opened with the sidebar shown shows it
+  at once, rather than sliding it in from nothing.
+- Editing, making, renaming and deleting files needs the newer host,
+  which comes with the app on this machine: hosts get it with their next
+  update.
+
+## 2.1.28
+
+- The changes panel shows the changed files' tree beside their diffs, a
+  button in its row of controls: a click on a file scrolls the diffs to
+  it, one on a folder folds it, and the file whose diff is at the top
+  shows as the one there. The button keeps the tree as you left it.
+- **Collapse All**, beside it, folds every file's diff, keeping the file
+  at the top there, and **Expand All**, in its place once all are
+  folded, unfolds them.
+- `scrollback-limit` now sets the scrollback the app's copy of a pane
+  keeps too: before, it kept the terminal's default of 10 MB whatever
+  the setting said, even 0.
+- On Windows, text copied from Notepad pastes. Thanks @xli21-code for
+  the report
+- A quick tap in the settings sidebar is no longer missed. Thanks
+  @ClanceyLu
+
+## 2.1.27
+
+- Paper is the theme a window starts with, and `theme` names Kero's
+  themes as the tiles under Settings › Appearance › **Theme** do:
+  `paper`, `petal`, `mist`, `meadow`, `dusk`, `tide`, `apricot`,
+  `aurora`, `dune` or `plain`, a Ghostty theme, or one for each
+  appearance, as `light:paper,dark:dusk`. **None** under Settings ›
+  Appearance › **Ghostty themes** goes back to it, Paper until you
+  choose another of Kero's.
+- `background` is gone: a `background = petal` line still picks that
+  theme, and `theme = kero` still follows it, while saving from Settings
+  writes `theme` in its place.
+
+## 2.1.26
+
+- A theme colors the whole window now, as it does in Ghostty: the panes,
+  their text, the accent and the terminals' colors, over its wash,
+  instead of only the wash under the cards. Settings › Appearance ›
+  **Theme** shows a row of light themes and a row of dark ones, each
+  drawn in its own colors: a click picks one for the windows of that
+  appearance, and `light:paper,dark:dusk` sets both in the
+  configuration.
+- New themes: **Paper**, white panes in ink on a flat gray, and
+  **Tide**, **Apricot**, **Aurora** and **Dune**. The dark themes no
+  longer look alike: each has a hue of its own.
+- Each theme tints the programs' colors to its hue, so that they sit
+  with the theme rather than look the same in every one.
+- In the light, a pane lies flat on the theme with a hairline instead of
+  a shadow.
+- A Ghostty theme, one of Kero's or your own in ~/.config/ghostty/themes,
+  still colors the window, its panes and terminals: Settings ›
+  Appearance › **Ghostty themes** picks one for light windows and one
+  for dark, in place of the theme above, and Terminal has no Colors
+  group anymore. `theme` in the configuration is the window's theme,
+  and `background` still picks Kero's theme where it is `kero`.
+
+## 2.1.25
+
+- A session's row in the sidebar has a second line: the message its
+  program reported, as with `kero report`, else its branch and its
+  changes, else its folder. A long branch no longer gets cut to a few
+  characters by the name. Settings › General › **Sidebar rows** keeps
+  the one-line rows as **Compact**, and `sidebar-rows` sets it in the
+  configuration.
+- Settings › Terminal › **Scrolling** sets how far a notch of the mouse
+  wheel scrolls, and how fast scrolling with two fingers goes, as
+  Ghostty's `mouse-scroll-multiplier` does in the configuration.
+- A configuration that is a symlink, as one kept in a dotfiles
+  repository, stays a symlink when you save from Settings, and an edit
+  to the file it points to applies at once.
+- `kero report` works when a program runs it with no terminal, as
+  Claude Code's shell tool does: the report reaches the pane's row all
+  the same. Hosts get it with their next update.
+
+## 2.1.24
+
+- On macOS, dragging Kero's window by its top no longer makes it
+  shake.
+
+## 2.1.23
+
+- On macOS, Kero keeps its place in the Dock after it updates itself.
+
+## 2.1.22
+
+- With no session open, Split Right (⌘D) starts one. Thanks @iamvicliu
+- Images a program like Pi showed no longer stay over the screen once
+  it clears it, as with Pi's `/new`. Thanks @jorben for the report
+- After Kero relaunches to use a newer kerod, quitting it quits it
+  instead of leaving it stuck open.
+
+## 2.1.21
+
+- In a narrow sidebar, a session's time, and its ⌘ number while you
+  hold ⌘, show whole beside a long name, which ends in an ellipsis
+  instead. Thanks @jamdaniels for the report
+
+## 2.1.20
+
+- A quick terminal drops down from the top of the screen over any app
+  and goes back up when you press its shortcut again. Give it a
+  shortcut in Settings › Keyboard (**Quick Terminal**); **View › Quick
+  Terminal** and the menu bar icon open it too. Its session keeps
+  running while it's hidden.
+- On Windows, an agent finishing in the session you have selected
+  shows its notification while another app is in front. Thanks @Maasea
+  for the report
+- Return presses a confirmation's action, such as Close Pane, as its
+  ↩ says. Thanks @iamvicliu
+- On a Mac, after Kero updates itself, quitting an app you started in
+  a pane no longer ends every pane's shell.
+
+## 2.1.19
+
+- **Session › New Session in Worktree…** (⌘⌥T) starts a session on a
+  new branch in a git worktree of its own, so agents working side by
+  side don't trip over each other's changes. Closing the session offers
+  to remove the worktree. `kero new --worktree <branch>` does the same
+  from the command line.
+- Kero remembers the conversations of Claude Code, Codex, Pi and
+  OpenCode that ran in its panes, so you can resume one after its
+  session is closed: ⌘P lists recent ones, and **Session › Resume
+  Conversation…** (⌘⇧O) lists them all. Turn on Settings › General ›
+  **Session history** to list them at the bottom of the sidebar too,
+  under **Ended** and **Archived**. `kero history` and `kero resume` do
+  the same from the command line. Thanks @ak4duy
+- Drop folders onto the sidebar to open them as projects. Thanks
+  @p1xelll
+- Dragging the sidebar's empty space moves the window, as the top bar
+  does. Thanks @jamdaniels for the request
+
+## 2.1.18
+
+- On a Mac, programs run in Kero can use the microphone and the camera,
+  and control other apps: macOS asks first, as it does for other
+  terminals. Thanks @jamdaniels for the report
+- Kero reaches SSH hosts with the SSH agent your shell sets up, such as
+  1Password's, as `ssh` in a terminal does. Thanks @frankittee for the
+  report
+- **Close All Sessions** in a project's menu ends every session in the
+  project and keeps the project. Thanks @netube99
+- Pressing Command while a trackpad scroll is still coasting no longer
+  changes the font size. Thanks @iamvicliu
+
+## 2.1.17
+
+- Codex 0.164's panes resume their own conversations after kerod
+  restarts, now that one Codex app server runs every pane's hooks. On
+  another machine, this works once that host gets this update. Thanks
+  @voidyuu for the report
+- `kero browser snapshot` prints what a page shows as roles and names,
+  each element with a ref that `click`, `type` and the rest take with
+  `--ref`. `kero browser screenshot` works on a pane not on screen, and
+  `kero browser cookies save` and `load` keep a browser's sign-ins, as
+  Playwright's storage state or a `cookies.txt`.
+- With Kero's icon showing, Command+W and the close button close the
+  main window rather than hide it, and Kero keeps running in the menu
+  bar or the notification area.
+- macOS 27 no longer runs an AutoFill helper process for Kero.
+
+## 2.1.16
+
+- **Settings › General › Show app icon** on a Mac puts Kero in the Dock
+  and the menu bar, the Dock only, or the menu bar only. Windows and
+  Linux always show it in the notification area. Its menu opens Kero
+  and Settings and checks for updates. While the icon shows, closing
+  the window keeps Kero running there.
+- `kero events` prints what happens to sessions and panes as it
+  happens, such as a pane coming to need you, so a script can follow
+  every agent without polling `kero status`. On another machine, it
+  works once that host gets this update.
+- macOS no longer runs an AutoFill helper process for Kero.
+
+## 2.1.15
+
+- yazi's image previews show the image, not a box of placeholder
+  characters, locally and over SSH. Thanks @voidyuu for the report
+
+## 2.1.14
+
+- On a Mac, Command+Left and Command+Right go to the start and end of
+  the line in the shell, as in Ghostty. Thanks @eliottwantz
+- Kero speaks Japanese: pick it under **Language** in Settings.
+- Powerline's rounded separators in prompts fill the line's height,
+  with no gap when the line height is above 1.
+- On Linux, closing Settings no longer closes the app.
+
+## 2.1.13
+
+- Mouse clicks and drags work in herdr and other apps built on
+  crossterm, locally and over SSH.
+- Programs that change what Backspace or Alt sends, or how the keypad
+  works with NumLock, get the keys as they asked for them.
+
+## 2.1.12
+
+- Pasting an image alone, such as a screenshot, into a pane pastes the
+  path of a file with it, which agents like Claude Code attach as an
+  image. Before, it pasted nothing. Thanks @jorben
+- **Settings › Terminal › Font** lists every monospaced font you have
+  installed, such as Nerd Font builds, not only the common ones.
+  Thanks @smallnest
+- The Changes panel no longer closes the app when it shows Python code
+  with a single-quoted f-string, such as `f'{x}'`.
+
+## 2.1.11
+
+- You can drag the terminal's scroll bar. It shows when you scroll or
+  point at the right edge of a pane, even at the bottom, widens under
+  the pointer, and fades out a second after you stop.
+- In panes on Windows, Ctrl+C ends programs such as `vite` or
+  `ping -t`. Windows hosts get it with their next update.
+
+## 2.1.10
+
+- On Windows, pasting with Ctrl+V into a text field, such as a host's
+  address in **Settings › Hosts**, pastes once, not twice.
+
+## 2.1.9
+
+- On a Mac, Command+Backspace clears the line you're typing in the
+  shell, as in Ghostty. Thanks @eliottwantz
+
+## 2.1.8
+
+- With the Tailscale app on a Mac, **Settings › Hosts › Let other
+  machines connect** no longer says Tailscale isn't running when it is,
+  and kerod listens on your tailnet as it should.
+
+## 2.1.7
+
+- Kero can update a host that runs the Kero desktop app, not only the
+  server build: turn on **Settings › Hosts › Let them update Kero here**
+  on that computer (`remote-updates = true`), and its project in your
+  sidebar shows **Update** when it's behind. The app there updates,
+  relaunches and restarts kerod. It's off unless you turn it on, and the
+  host needs 2.1.7 itself, so update it there once more first.
+
+## 2.1.6
+
+- A session open in Kero on two machines no longer takes the size of a
+  machine you've walked away from: Kero sizes it for the one you're at,
+  and gives it back to the other as soon as you return there or this one
+  quits or sleeps. Hosts get it with their next update.
+- Panes and sessions on a Windows host are named by their folder
+  (`mygo`), not its whole path (`C:\Users\you\dev\mygo`).
+
+## 2.1.5
+
+- A session open in Kero on two machines takes the size of the one you're
+  using, the one you last typed, scrolled or switched to the session in,
+  rather than of the last to resize it. Resizing a split on one machine
+  no longer cuts off the bottom of the pane on the other. Hosts get it
+  with their next update.
+- Dragging the divider between panes, or the sidebar's edge, leaves the
+  keyboard in the pane you were typing in.
+- After an update, Kero offers to restart kerod only when the update
+  changed it.
+
+## 2.1.4
+
+- The folder picker and the command palette scroll with the mouse wheel
+  and trackpad, rather than snapping back to the highlighted row. Thanks
+  @ak4duy.
+
+## 2.1.3
+
+- On Windows, turning on **Let other machines connect** in Settings ›
+  Hosts no longer flashes a console window open, nor does Kero on
+  another machine connecting to it.
+- Settings › Hosts leaves the commands for setting up a host to the guide
+  it links to.
+
+## 2.1.2
+
+- Settings › Hosts can share this computer with Kero on your other
+  machines: turn on **Let other machines connect**, and copy the address
+  it shows to add it there. kerod then listens on your tailnet, and only
+  your Tailscale account may connect. kerod now follows `listen` and
+  `listen-allow` in the config file as they change, without a restart,
+  and a listener turned off drops the connections it took.
+- Hosts can be edited in Settings › Hosts: a host renamed keeps its
+  connection and sessions, and one given another address connects again.
+  The page links to the guide to setting up hosts.
+- On Windows, a restored pane's shell starts under its history, rather
+  than drawing what you type at the top of the pane.
+
+## 2.1.1
+
+- On Windows, the mouse wheel scrolls full-screen programs that take the
+  mouse as they start, such as pi, rather than stepping through their
+  prompt history. Kero now runs panes in the newer console Windows
+  Terminal uses, which it ships, so programs get the mouse, the wheel and
+  what they draw as they would there. Windows hosts get it with their
+  next update.
+
+## 2.1.0
+
+- Browser panes show web pages beside your terminals: the dev server an
+  agent works on, the docs it reads, the pull request it opened. One
+  splits, zooms, moves and closes like any pane, and comes back on the
+  same page when Kero restarts. Open one with <kbd>⌘</kbd> <kbd>⇧</kbd>
+  <kbd>B</kbd>, by typing an address in the command palette, or with
+  `kero split --url localhost:3000`; <kbd>⌘</kbd> <kbd>L</kbd> goes to
+  its address bar, which shows the site's icon.
+- `kero browser` drives a browser pane's page the way `kero send` and
+  `kero read` drive a terminal: it opens pages, clicks, types, waits for
+  elements or text, reads the page's text and HTML, runs JavaScript and
+  takes screenshots. Like `kero do`, it needs Remote Control.
+- Browser panes block ads and trackers, with EasyList and EasyPrivacy to
+  begin with. Settings › Browser turns it off or picks other filter
+  lists, or `browser-block-ads` and `browser-filter-list` in the config
+  file, which takes the URL of any list in Adblock Plus syntax too.
+- With `focus-follows-mouse`, the pane the pointer moves into gets the
+  focus.
+- Dim unfocused terminals, in Settings › Terminal, or
+  `dim-unfocused-terminals = false`, keeps the terminals you're not in
+  from fading.
+- The command palette finds commands and Settings pages by keywords, and
+  by their English names in any language.
+- Kero shows sessions that run on other machines, such as a Linux dev box,
+  a cloud VM or a WSL distribution, in the same sidebar, tagged with each
+  host's name, with their statuses and notifications. Add a host in
+  Settings › Hosts by the address you'd give ssh, `me@devbox`: Kero
+  reaches it over
+  SSH with your keys and agent, or through kerod's listener on your
+  tailnet (`listen = tailnet://:7373`), which Tailscale tells who
+  connects to. One compressed connection carries all of a host's panes,
+  and a host whose link drops shows its sessions faded until Kero
+  reconnects on its own.
+- On a host, New Session, Open Project (which lists the host's folders),
+  Command-clicking a path (which opens it in the host's `$EDITOR`) and
+  pasting an image or files (which copies them to the host) all act on
+  the host. Its programs drive the app with `kero focus` and `kero do`
+  only once you turn on its Remote Control.
+- The sidebar stays flat with hosts: their projects follow yours, each
+  tagged with its host's name, so the same repository on two machines
+  sits side by side. A host has a row of its own only when it needs you,
+  as when it can't be reached; one with no sessions doesn't show. Its
+  menu is in its projects'. Each host wears a color, picked from its name or set
+  with `color=`, on its tag and its name in a pane's header. With hosts,
+  Open Project lists any machine's folders in Kero, with a switch
+  between them.
+- The server build of Kero runs kerod and the CLI on Linux, macOS and
+  Windows with no app, display or GTK: `curl -fsSL
+  https://github.com/egoist/kero/releases/latest/download/install-server.sh
+  | sh`, or on Windows `irm .../install-server.ps1 | iex`. The app offers
+  to install it on a host that has no Kero, and to update it to the app's
+  version, signed as the app's updates are. Windows hosts are reached
+  over OpenSSH, whose shell may be cmd or PowerShell.
+- `kero -H <host>` and `$KERO_HOST` run commands on a host's sessions; `kero
+  hosts` adds, checks and installs hosts; `kero clients` lists who is
+  connected to kerod; `kero daemon install-service` runs kerod as a
+  systemd user service, a launchd agent or a Task Scheduler task, and
+  `kero daemon serve` in the foreground.
+- kerod's socket is its user's from the moment it is made, and kerod
+  refuses connections of other users' processes. The login shell is
+  looked up through NSS, so LDAP and SSSD accounts get theirs.
+
+## 2.0.11
+
+- The changes panel no longer jumps to the bottom of the list the first
+  time a long file's diff scrolls into view, and the header of the file at
+  the top of the list stays there as a file is folded, rather than
+  vanishing for a moment. Only the diffs in view are built, so a long list
+  of changes scrolls as quickly as a short one.
+- On Windows 11 24H2 and later, clearing a pane clears the console's screen
+  too, so PowerShell's inline predictions no longer draw on the line the
+  prompt was on before.
+
+## 2.0.10
+
+- Each pane's title shows the branch it works on and the lines its changes
+  add and remove since the last commit, `fix-login +40 −2`, and a merge or
+  rebase in progress; click it to open the changes panel. A session on a
+  branch other than the repository's default shows that branch in the
+  sidebar, and its tooltip how far it is ahead of or behind its upstream
+  and how many files changed.
+- The changes panel (Option-Command-G, Ctrl+Shift+G on Windows and Linux)
+  lists the files a session changed since its agent's last turn, since the
+  last commit, or since the branch left the default one, each with its diff
+  below it, which follows the file as it changes. Fold a file, resize the
+  panel, switch between unified and side-by-side diffs, and in Last Turn
+  revert a change or mark it kept.
+- `kero diff` prints a pane's changes as `git diff` does, untracked files
+  included; `--turn` and `--branch` choose what to compare against. `kero
+  status --json` and `kero ls --json` include each pane's branch and
+  changes.
+- Sessions in a worktree outside its repository join the repository's
+  project instead of starting one of their own.
+- `git-status = false` stops Kero running git in your repositories, and
+  `diff-layout` keeps the changes panel's diffs unified or side by side.
+
+## 2.0.9
+
+- Only agents that show their work with a progress bar, as Kiro and
+  Qwen, turn their pane working by it: Neovim's language-server progress
+  no longer marks its pane as working.
+
+## 2.0.8
+
+- Agents no longer rename the session they start in: an unnamed session
+  keeps showing its agent's own title, as "Duplicate spinner in pane
+  header", not a name in words joined by dashes.
+- Files dropped on a pane paste their paths quoted for the program's
+  shell, newlines and PowerShell's included.
+- Find in a pane highlights a match that wraps in from above the view.
+- A pane's scrollback stays whole as it reaches its limit, and a restored
+  pane keeps the blank rows at the bottom of its screen.
+
+## 2.0.7
+
+- A split pane's title leads with its program's logo: Claude Code's,
+  Codex's and other agents', Node.js's for a script node runs, as vite,
+  and those of bun, deno, python, vim, git and docker; a shell's is a
+  bolder terminal icon.
+- A split pane shows its status once, by its title, not again in the
+  chip beside it.
+- An unnamed session takes its name from the program in the pane you're
+  in, else in the one that most needs you; `session-name` chooses
+  between these and the first pane's folder.
+- Clear Scrollback in a pane's context menu clears as Cmd+K does, the
+  screen too, and works on a full-screen program's.
+
+## 2.0.6
+
+- Images programs show appear in their panes, as grok's preview of a
+  pasted image, through the Kitty graphics protocol, as in Ghostty.
+- Command-hovering an image's path in a pane previews the image.
+- Files dropped on a pane paste their paths, escaped for the shell, as in
+  Ghostty: an agent takes a dropped image as a file it attaches.
+- The mouse lands where it points in programs that take it in pixels:
+  Claude Code's "Jump to bottom" lights up and takes a click, and dragging
+  selects its text again.
+- Programs asking the terminal's colors get the theme's: Copilot CLI's
+  input box is light on a light theme. Colors a program sets for the
+  terminal show, and programs that follow the appearance, as Claude Code
+  and Copilot CLI, change with it when it goes from light to dark.
+- Box drawing and blocks keep their colors under `minimum-contrast`, and
+  only rows a program fills extend into a pane's padding, as in Ghostty:
+  Copilot CLI's input box and tabs draw as they should.
+- A name an agent gave its session with `kero rename` goes when a new
+  conversation starts in the session's first pane.
+- After updating, Kero asks to restart kerod, whose sessions restore as
+  after a restart of the Mac.
+
+## 2.0.5
+
+- Find in a pane's scrollback with Cmd+F (Ctrl+F on Windows).
+- Text stays readable on a light background: colors meant for a dark one,
+  as Claude Code's near-white grays, get enough contrast with it. The new
+  `minimum-contrast` setting sets how much, as in Ghostty.
+- Command-hovering a link in a terminal underlines it.
+- A pane shows where its agent works: the worktree Claude Code went into,
+  rather than the folder its shell started in. Links, Copy Directory and
+  Reveal follow it.
+- Codex sessions are told to the pane that runs them, for resuming after
+  kerod restarts, rather than to the pane that first started Codex's
+  background service.
+
+## 2.0.4
+
+- Terminals show the cursor chosen in Settings, its shape and whether it
+  blinks, rather than always a blinking block.
+
+## 2.0.3
+
+- An agent sitting at its prompt no longer shows as needing you, as Claude
+  Code did a while after answering. A bell or a program's desktop
+  notification leaves its status alone; programs' notifications show as
+  they are.
+
+## 2.0.2
+
+- Installing the command line tool on macOS asks for an administrator's
+  password instead of failing.
+
+## 2.0.1
+
+- Kero speaks Simplified Chinese; pick the language in Settings.
+- Rename a project from its menu in the sidebar.
+- `kero skill setup` hooks Claude Code, Codex, Pi and OpenCode into Kero as
+  they start: an agent learns its session and pane, names an unnamed session
+  after its task, and resumes when kerod restarts.
+- `kero new|split --wait` and `kero wait --exit` exit with the command's
+  status.
+- When kerod runs another version of Kero, a Restart Service chip offers to
+  restart it. Settings shows updates on its General page.
+- A home directory pane shows `~` once in its header.
+
+## 2.0.0
+
+Kero, rewritten from the ground up: sessions grouped by project in a sidebar
+that shows which are working, which need you and which are done. Sessions run
+in kerod, a daemon of their own, so quitting Kero leaves them running.
+
+- Runs on macOS, Windows and Linux.
+- The `kero` CLI drives sessions from a shell or an agent.
+- Updates itself from Kero's releases.

@@ -1,0 +1,78 @@
+name: Bug report
+description: Something in Kero, kerod or the kero CLI doesn't work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please search [existing issues](https://github.com/egoist/kero/issues) first, and update to the [latest release](https://github.com/egoist/kero/releases) to check it still happens.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that shows it. Include the command if it's the CLI, or the program running in the pane (Claude Code, Codex, vim…) if it's a terminal problem.
+      placeholder: |
+        1. kero new -n test -- claude
+        2. Split the pane with ⌘D
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Kero version
+      description: From **About Kero**.
+      placeholder: "2.0.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      description: And for Linux, the distribution and desktop (Wayland or X11).
+      placeholder: "macOS 26.1 / Windows 11 24H2 / Ubuntu 24.04, GNOME, Wayland"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Terminal rendering or input
+        - Sessions and panes
+        - Sidebar and status
+        - Notifications
+        - kero CLI
+        - kerod (background service)
+        - Settings and configuration
+        - Install or update
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: |
+        The kerod log is in **Settings › Advanced › Background service › Log**. Paste the lines around the problem, and attach screenshots or a recording if it's visual. `kero daemon status` and `kero config check` output help too.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Anything you've changed in `kero config edit` that might matter, such as the font, theme or shell.
+      render: text

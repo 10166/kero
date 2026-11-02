@@ -1,14 +1,12 @@
 {
   "name": "kero-monorepo",
-  "version": "0.0.0",
   "private": true,
-  "type": "module",
+  "workspaces": [
+    "website",
+    "docs"
+  ],
   "scripts": {
-    "release": "bun run scripts/release.ts",
-    "appcast": "bun run scripts/generate-appcast.ts"
-  },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "workspaces": ["web"]
+    "dev": "bun --filter website dev",
+    "build": "bun --filter website build"
+  }
 }

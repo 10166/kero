@@ -2,7 +2,7 @@
 /build/
 
 # Bun / node deps
-/node_modules/
+node_modules/
 
 # Rust build output for the Alacritty backend's bridge. Cargo.lock IS tracked:
 # the Xcode build phase passes --locked so a build is reproducible.
@@ -32,3 +32,8 @@ playground.xcworkspace
 # Headless daemon build output; its Cargo.lock is tracked.
 /daemon/target/
 /Vendor/tty7-core/target/
+
+/.mygo/
+mygo_windows_*.syso
+/kero
+/kero.exe

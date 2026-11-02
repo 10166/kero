@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "web",
+      "name": "website",
       "runtimeExecutable": "bun",
-      "runtimeArgs": ["run", "--cwd", "web", "dev"],
-      "port": 3000
+      "runtimeArgs": ["run", "--cwd", "website", "dev", "--port", "5180", "--strictPort"],
+      "port": 5180
     }
   ]
 }
