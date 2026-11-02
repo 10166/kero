@@ -248,9 +248,9 @@ extension KeroTerminalView {
                 settings.macosOptionAsAlt ? "true" : "false"
             )
             builder.withCustom("scrollbar", "never")
-            // Kero uses Shift internally to start a native selection when a
-            // mouse-reporting TUI receives a drag. Do not let that TUI reclaim
-            // Shift through XTSHIFTESCAPE.
+            // Kero uses Shift internally to keep native selection drags and
+            // releases out of mouse-reporting TUIs. Do not let those programs
+            // reclaim Shift through XTSHIFTESCAPE.
             builder.withCustom("mouse-shift-capture", "never")
             // Terminal-program clipboard access via OSC 52, matching the
             // Ghostty app defaults: reads prompt the user per request

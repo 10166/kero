@@ -246,3 +246,58 @@ index d34164f..c83fcc0 100755
          *-ios) COMPAT_SDK="iphoneos" ;;
          *-tvos-simulator) COMPAT_SDK="appletvsimulator" ;;
          *-tvos) COMPAT_SDK="appletvos" ;;
+diff --git a/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView+PublicInput.swift b/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView+PublicInput.swift
+index 323ac21..ff87114 100644
+--- a/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView+PublicInput.swift
++++ b/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView+PublicInput.swift
+@@ -45,6 +45,11 @@
+             surface?.hasSelection() ?? false
+         }
+ 
++        /// Whether the foreground terminal program requested mouse events.
++        public var isMouseCapturedByProgram: Bool {
++            surface?.isMouseCaptured ?? false
++        }
++
+         /// Search the screen and scrollback for `needle`, replacing any active
+         /// search. An empty needle cancels without dismissing host search UI.
+         @discardableResult
+diff --git a/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView.swift b/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView.swift
+index 26e3de8..7df10c3 100644
+--- a/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView.swift
++++ b/Sources/GhosttyTerminal/Platform/AppKit/AppTerminalView.swift
+@@ -24,6 +24,12 @@
+         var presentationCoverGeneration: UInt64 = 0
+         var hasCapturedPresentationFrame = false
+ 
++        /// Whether unmodified navigation keys (arrows, Home/End, Page Up/Down,
++        /// Delete, Backspace, Tab) are written straight to an in-memory session.
++        /// That skips Ghostty's key encoder, so DECCKM and kitty keyboard
++        /// flags are ignored. Hosts that render a real terminal turn it off.
++        public var sendsNavigationKeysDirectly = true
++
+         /// Pointer shape ghostty last asked for. Seeded with `.text` because
+         /// that is what the grid resolves to, and ghostty only emits the action
+         /// once the pointer actually moves over the surface.
+diff --git a/Sources/GhosttyTerminal/Platform/AppKit/TerminalKeyEventHandler@AppKit.swift b/Sources/GhosttyTerminal/Platform/AppKit/TerminalKeyEventHandler@AppKit.swift
+index 4728892..301be1d 100644
+--- a/Sources/GhosttyTerminal/Platform/AppKit/TerminalKeyEventHandler@AppKit.swift
++++ b/Sources/GhosttyTerminal/Platform/AppKit/TerminalKeyEventHandler@AppKit.swift
+@@ -187,7 +187,7 @@
+         }
+ 
+         private func handleDirectInputIfNeeded(_ event: NSEvent) -> Bool {
+-            guard let view else { return false }
++            guard let view, view.sendsNavigationKeysDirectly else { return false }
+             // During IME composition, AppKit needs to keep ownership of editing
+             // commands so marked text can shrink, cancel, and move correctly.
+             guard inputMethodHandler?.hasMarkedText != true else { return false }
+@@ -206,7 +206,7 @@
+         }
+ 
+         private func shouldBypassGhosttyForDirectInput(_ event: NSEvent) -> Bool {
+-            guard let view else { return false }
++            guard let view, view.sendsNavigationKeysDirectly else { return false }
+             guard Self.shouldUseDirectInput(modifierFlags: event.modifierFlags) else {
+                 return false
+             }

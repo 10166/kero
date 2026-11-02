@@ -101,6 +101,23 @@ xcrun swiftc -parse-as-library -framework AppKit -framework ImageIO \
 /tmp/KeroRemoteImagePasteChecks
 ```
 
+## Terminal selection regression checks
+
+After an Apple Silicon Debug build, run
+`tests/run-terminal-selection-checks.sh /path/to/DerivedData` with an awake display.
+It opens the production `KeroTerminalView` with the app's bundled Ghostty engine
+and checks, in a mouse-reporting TUI, that:
+
+- navigation keys follow application cursor mode;
+- a second drag starts a new selection and mouse-up stops selecting;
+- Shift-click extends a selection and Shift-double-click selects a word;
+- plain clicks, double-clicks, clicks with finger jitter, and right-clicks reach
+  the program;
+- a click that only focuses a pane stays out of the program, while dragging from
+  it still selects.
+
+It does not access the system clipboard.
+
 ## Website and docs
 
 The site is in [`web/`](web/README.md); user documentation is MDX under

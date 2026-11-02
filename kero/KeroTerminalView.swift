@@ -43,10 +43,20 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     private var capturedHistoryExportPath: String?
     private var isSurfaceVisible = false
     private var pendingCapturedMouseDown: NSEvent?
+    /// The pending press only moved focus to this pane, so it is not a click
+    /// for the program and is dropped on release.
+    private var pendingMouseDownOnlyFocused = false
     private var isSelectingCapturedText = false
+    private var isRightClickForwarded = false
+    /// Points the pointer must travel before a pending click becomes a
+    /// selection drag. Trackpad fingers wobble a pixel or two during a click.
+    private static let dragSelectionThreshold: CGFloat = 4
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // Route arrows, Backspace and friends through Ghostty's key encoder so
+        // DECCKM and kitty keyboard modes apply, as in the stock app.
+        sendsNavigationKeysDirectly = false
         installProgressBar()
         installRemoteControlBanner()
         registerForDraggedTypes([.fileURL])
@@ -300,36 +310,44 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
 
     override func mouseDown(with event: NSEvent) {
         pendingCapturedMouseDown = nil
+        pendingMouseDownOnlyFocused = false
         isSelectingCapturedText = false
         let point = convert(event.locationInWindow, from: nil)
         if isRemotelyControlled, remoteControlBanner.frame.contains(point) {
             onTakeBackRemoteControl?()
             return
         }
+        let onlyTransfersFocus = window.map { $0.isKeyWindow && $0.firstResponder !== self } ?? false
         focusForInteraction()
-        if isMouseCapturedByProgram {
-            if event.clickCount > 1 {
-                // Double and triple clicks retain native word/line selection.
-                isSelectingCapturedText = true
-                super.mouseDown(with: selectionEvent(event))
-                return
-            }
-            if event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
-                // A click still reaches the TUI on mouse-up. Waiting until
-                // the first drag lets ordinary dragging select text for Cmd-C
-                // without taking click navigation away from the program.
-                pendingCapturedMouseDown = event
-                return
-            }
+        if isMouseCapturedByProgram,
+           event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+            // A click still reaches the TUI on mouse-up. Waiting until
+            // the first drag lets ordinary dragging select text for Cmd-C
+            // without taking click navigation away from the program. This
+            // includes the second and third press of a multi-click: the TUI
+            // does its own double-click detection (e.g. expanding a block), so
+            // swallowing them for native word selection would break it. As in
+            // Ghostty, Shift-double-click is the way to select a word natively.
+            // Ghostty likewise keeps a click that merely focuses a pane away
+            // from the program (a drag from it still selects).
+            pendingCapturedMouseDown = event
+            pendingMouseDownOnlyFocused = onlyTransfersFocus
+            return
         }
         super.mouseDown(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
         if let down = pendingCapturedMouseDown {
+            // Below the threshold this is still a click, and the program has
+            // not seen the press yet, so no motion is reported either.
+            let travel = hypot(
+                event.locationInWindow.x - down.locationInWindow.x,
+                event.locationInWindow.y - down.locationInWindow.y
+            )
+            guard travel >= Self.dragSelectionThreshold else { return }
             pendingCapturedMouseDown = nil
-            isSelectingCapturedText = true
-            super.mouseDown(with: selectionEvent(down))
+            beginCapturedTextSelection(with: down)
         }
         super.mouseDragged(with: isSelectingCapturedText ? selectionEvent(event) : event)
     }
@@ -337,12 +355,26 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     override func mouseUp(with event: NSEvent) {
         if let down = pendingCapturedMouseDown {
             pendingCapturedMouseDown = nil
+            if pendingMouseDownOnlyFocused {
+                pendingMouseDownOnlyFocused = false
+                return
+            }
             super.mouseDown(with: down)
             super.mouseUp(with: event)
             return
         }
         super.mouseUp(with: isSelectingCapturedText ? selectionEvent(event) : event)
         isSelectingCapturedText = false
+    }
+
+    private func beginCapturedTextSelection(with event: NSEvent) {
+        isSelectingCapturedText = true
+        // Shift bypasses TUI mouse capture but also extends an existing
+        // selection. Let the press keep its real modifiers so a plain drag
+        // starts a new anchor, without sending that press to the program.
+        performBindingAction("toggle_mouse_reporting")
+        defer { performBindingAction("toggle_mouse_reporting") }
+        super.mouseDown(with: event)
     }
 
     private func selectionEvent(_ event: NSEvent) -> NSEvent {
@@ -377,10 +409,18 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
 
     // MARK: - Context menu
 
-    /// Kero consistently reserves right-click for its terminal/pane menu. This
-    /// matches Kero's existing UI, including focusing before Paste.
+    /// Kero's right-click menu is the default, including focusing before Paste.
+    /// A program that captured the mouse owns right-click instead, as in
+    /// Ghostty (tmux and vim menus, lazygit actions). Shift keeps the Kero menu
+    /// reachable, and Command keeps the link actions below.
     override func rightMouseDown(with event: NSEvent) {
         focusForInteraction()
+        isRightClickForwarded = isMouseCapturedByProgram
+            && event.modifierFlags.intersection([.shift, .command]).isEmpty
+        if isRightClickForwarded {
+            super.rightMouseDown(with: event)
+            return
+        }
         NSMenu.popUpContextMenu(
             contextMenu(linkTarget: linkTarget(for: event)),
             with: event,
@@ -388,7 +428,15 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
         )
     }
 
-    override func rightMouseUp(with event: NSEvent) {}
+    override func rightMouseUp(with event: NSEvent) {
+        guard isRightClickForwarded else { return }
+        isRightClickForwarded = false
+        super.rightMouseUp(with: event)
+    }
+
+    /// Kero has its own context menu. The base view's copy-only selection menu
+    /// would otherwise swallow a right-click the program should receive.
+    override func selectionMenuPoint(at point: CGPoint) -> CGPoint? { nil }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         focusForInteraction()
