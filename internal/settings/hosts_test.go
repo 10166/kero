@@ -59,6 +59,8 @@ func TestHostKeyProblems(t *testing.T) {
 		"host = devbox=ftp://devbox",
 		"host = devbox=me@devbox sudo",
 		"host = devbox=me@devbox color=chartreuse",
+		"host = devbox=me@devbox display-name64=!",
+		"host = devbox=me@devbox directory64=cmVsYXRpdmU",
 		"host = a=x\nhost = A=y",
 		"listen = tcp://:80",
 	} {

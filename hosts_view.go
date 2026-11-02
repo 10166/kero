@@ -47,18 +47,24 @@ func (a *App) hostLine(c *ui.Context, pal *palette, h *host, top float32) {
 // dot while it connects or failed to, a chip when Kero there wants
 // updating.
 func (a *App) hostHeader(c *ui.Context, pal *palette, h *host, top float32) {
-	hdr := ui.Row(c.Key("host-"+h.name)).Height(30).Margin(top, 0, 2, 0).Padding(0, 6, 0, 8).Gap(7).AlignItems(ui.Center).Radius(6)
+	key := h.name
+	if h.relayID != "" {
+		key = "relay-" + h.relayID
+	}
+	hdr := ui.Row(c.Key("host-"+key)).Height(30).Margin(top, 0, 2, 0).Padding(0, 6, 0, 8).Gap(7).AlignItems(ui.Center).Radius(6)
 	hovered := hdr.Hovered()
-	pointerTooltip(c, hdr, "tip-host-"+h.name, a.hostTip(h))
-	hdr.ContextMenu(func(m *ui.Menu) { a.hostMenu(m, h) })
+	pointerTooltip(c, hdr, "tip-host-"+key, a.hostTip(h))
+	if h.relayID == "" {
+		hdr.ContextMenu(func(m *ui.Menu) { a.hostMenu(m, h) })
+	}
 	hdr.Children(func() {
 		ui.Icon(c, hostIcon).Size(14, 14).TextColor(pal.hostColor(h)).Shrink(0)
-		ui.Text(c, h.name).FontSize(13).FontWeight(650).TextColor(pal.text).SingleLine().Ellipsis("…").MinWidth(0).Shrink(1)
+		ui.Text(c, h.label()).FontSize(13).FontWeight(650).TextColor(pal.text).SingleLine().Ellipsis("…").MinWidth(0).Shrink(1)
 		ui.Spacer(c)
 		a.hostState(c, pal, h)
-		if hovered && h.conn == connReady {
+		if hovered && h.conn == connReady && h.relayID == "" {
 			b := ui.ButtonBase(c.Key("add")).Size(20, 20).Radius(5).Center().TextColor(pal.textMuted).
-				Label(locales.NewSessionIn(h.name)).Tooltip(locales.ActionNewSession())
+				Label(locales.NewSessionIn(h.label())).Tooltip(locales.ActionNewSession())
 			if b.Hovered() {
 				b.Background(pal.rowHover).TextColor(pal.text)
 			}
@@ -80,7 +86,7 @@ func (a *App) hostTag(c *ui.Context, pal *palette, h *host) {
 		tag.Opacity(0.55)
 	}
 	tag.Children(func() {
-		ui.Text(c, h.name).FontSize(11.5).FontWeight(600).TextColor(col).SingleLine()
+		ui.Text(c, h.label()).FontSize(11.5).FontWeight(600).TextColor(col).SingleLine()
 	})
 }
 
@@ -134,6 +140,9 @@ func (a *App) hostDot(c *ui.Context, pal *palette, col ui.Color, label string) {
 
 // hostTip tells what a host is: its address, and Kero there.
 func (a *App) hostTip(h *host) string {
+	if h.relayID != "" {
+		return h.label()
+	}
 	tip := h.addr.String()
 	if i := h.info; i.OS != "" {
 		tip += "\n" + locales.HostAbout(i.Kero, i.OS+"/"+i.Arch, i.Hostname, i.User)
@@ -221,6 +230,9 @@ func smallButton(c *ui.Context, key, label string, primary bool, pal *palette) b
 
 // hostMenu is a host header's context menu.
 func (a *App) hostMenu(m *ui.Menu, h *host) {
+	if h.relayID != "" {
+		return
+	}
 	ready := h.conn == connReady
 	if m.Item(locales.ActionNewSession()).Disabled(!ready).Chosen() {
 		a.newSessionOn(h, "")
@@ -260,6 +272,11 @@ func (a *App) hostMenu(m *ui.Menu, h *host) {
 
 // reconnectHost connects to a host again, now, with a new connection.
 func (a *App) reconnectHost(h *host) {
+	if h.installCancel != nil {
+		h.installCancel()
+		h.installCancel = nil
+		h.busy = ""
+	}
 	a.dropTerms(h)
 	if h.cl != nil {
 		go h.cl.Close()
@@ -320,21 +337,32 @@ func (a *App) install(h *host) {
 	if !released(version) {
 		version = ""
 	}
-	cmd, err := remote.InstallCommand(h.addr, version, true)
-	if err != nil {
-		a.toast(err.Error())
-		return
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.installCancel = cancel
+	h.installGen++
+	gen := h.installGen
 	h.busy = "install"
 	go func() {
-		out, err := cmd.CombinedOutput()
+		out, err := remote.InstallInteractive(ctx, h.addr, version, a.sshPrompt)
+		canceled := ctx.Err() != nil
+		cancel()
 		a.update(func() {
+			if h.installGen != gen {
+				return
+			}
+			h.installCancel = nil
 			h.busy = ""
 			if !slices.Contains(a.hosts, h) {
 				return
 			}
+			if canceled || errors.Is(err, context.Canceled) {
+				return
+			}
 			if err != nil {
 				msg := strings.TrimSpace(string(out))
+				if errors.Is(err, remote.ErrSSHRejected) {
+					msg = err.Error()
+				}
 				if i := strings.LastIndex(msg, "\n"); i >= 0 {
 					msg = msg[i+1:]
 				}

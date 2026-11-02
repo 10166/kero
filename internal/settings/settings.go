@@ -5,6 +5,7 @@
 package settings
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,22 +40,23 @@ type Settings struct {
 	Vibrancy   bool   `json:"vibrancy"`   // the window's material under the wash
 
 	// Terminal
-	FontFamily   string  `json:"fontFamily"` // "" the font kero carries; "monospace" the system's
-	FontSize     float32 `json:"fontSize"`
-	LineHeight   float32 `json:"lineHeight"`
-	FontWeight   int     `json:"fontWeight"`
-	Ligatures    bool    `json:"ligatures"`
-	Thicken      bool    `json:"thicken"`
-	MinContrast  float32 `json:"minContrast"`           // a WCAG ratio text keeps with its background
-	DimUnfocused bool    `json:"dimUnfocusedTerminals"` // the terminals the user is not in fade
-	Cursor       string  `json:"cursor"`                // "block", "bar" or "underline"
-	CursorBlink  bool    `json:"cursorBlink"`
-	LightTheme   string  `json:"lightTheme"` // one of KeroThemes by its Name, or a Ghostty theme's
-	DarkTheme    string  `json:"darkTheme"`
-	OptionAsAlt  bool    `json:"optionAsAlt"`
-	CopyOnSelect bool    `json:"copyOnSelect"`
-	Clipboard    string  `json:"clipboard"`  // programs reading it: "ask", "allow" or "deny"
-	RightClick   string  `json:"rightClick"` // "menu", "paste" or "copyOrPaste"
+	TerminalBackend string  `json:"terminalBackend"` // "libghostty" or "alacritty"
+	FontFamily      string  `json:"fontFamily"`      // "" the font kero carries; "monospace" the system's
+	FontSize        float32 `json:"fontSize"`
+	LineHeight      float32 `json:"lineHeight"`
+	FontWeight      int     `json:"fontWeight"`
+	Ligatures       bool    `json:"ligatures"`
+	Thicken         bool    `json:"thicken"`
+	MinContrast     float32 `json:"minContrast"`           // a WCAG ratio text keeps with its background
+	DimUnfocused    bool    `json:"dimUnfocusedTerminals"` // the terminals the user is not in fade
+	Cursor          string  `json:"cursor"`                // "block", "bar" or "underline"
+	CursorBlink     bool    `json:"cursorBlink"`
+	LightTheme      string  `json:"lightTheme"` // one of KeroThemes by its Name, or a Ghostty theme's
+	DarkTheme       string  `json:"darkTheme"`
+	OptionAsAlt     bool    `json:"optionAsAlt"`
+	CopyOnSelect    bool    `json:"copyOnSelect"`
+	Clipboard       string  `json:"clipboard"`  // programs reading it: "ask", "allow" or "deny"
+	RightClick      string  `json:"rightClick"` // "menu", "paste" or "copyOrPaste"
 	// ScrollPrecision scales a touchpad's scrolling, and ScrollDiscrete is
 	// the rows a notch of a mouse wheel scrolls, as Ghostty's
 	// mouse-scroll-multiplier = precision:…,discrete:….
@@ -75,7 +77,9 @@ type Settings struct {
 	BounceDock    bool `json:"bounceDock"`
 
 	// Agents
-	RemoteControl bool `json:"remoteControl"` // kero focus and kero do drive the app
+	RemoteControl    bool   `json:"remoteControl"` // kero focus and kero do drive the app
+	RelayURL         string `json:"relayURL"`
+	RelayHostEnabled bool   `json:"relayHostEnabled"`
 
 	// Git
 	GitStatus  bool   `json:"gitStatus"`  // each pane's branch and changes, which kerod follows
@@ -112,7 +116,13 @@ type Settings struct {
 // (package remote).
 type Host struct {
 	Name string `json:"name"`
-	Addr string `json:"addr"`
+	// DisplayName is the original human-facing name; an empty value uses Name.
+	DisplayName string `json:"displayName,omitempty"`
+	// UUID retains the original Swift host identity when one was saved.
+	UUID string `json:"uuid,omitempty"`
+	// Directory is the host's absolute startup directory, or empty for home.
+	Directory string `json:"directory,omitempty"`
+	Addr      string `json:"addr"`
 	// RemoteControl lets the host's programs drive the app, as kero focus
 	// and kero do, which remote-control lets this machine's: off unless the
 	// user trusts the host with it.
@@ -149,6 +159,7 @@ func Default() Settings {
 		Appearance:      "system",
 		Language:        "system",
 		Vibrancy:        true,
+		TerminalBackend: "libghostty",
 		DimUnfocused:    true,
 		FontSize:        13,
 		LineHeight:      1.22,
@@ -227,10 +238,10 @@ var (
 func Load() Settings {
 	mu.Lock()
 	defer mu.Unlock()
-	migrate()
+	migrationProblems := migrate()
 	st, err := os.Stat(Path())
 	if err != nil {
-		cache, problems = nil, nil
+		cache, problems = nil, migrationProblems
 		return Default()
 	}
 	if cache != nil && st.ModTime().UnixNano() == mtime {
@@ -256,13 +267,16 @@ func Problems() []string {
 
 // migrate moves the settings of the JSON file kero kept before into the
 // configuration, once; mu is held.
-func migrate() {
-	if _, err := os.Stat(Path()); err == nil {
-		return
+func migrate() []string {
+	if _, err := os.Lstat(Path()); err == nil || !os.IsNotExist(err) {
+		return nil
 	}
 	b, err := os.ReadFile(legacyPath())
+	if os.IsNotExist(err) {
+		return migrateSwift()
+	}
 	if err != nil {
-		return
+		return nil
 	}
 	// Then, the themes were "kero" for background's.
 	old := struct {
@@ -271,16 +285,17 @@ func migrate() {
 	}{Settings: Default()}
 	old.LightTheme, old.DarkTheme = "kero", "kero"
 	if json.Unmarshal(b, &old) != nil {
-		return
+		return nil
 	}
 	s := old.Settings
 	if bg := keroThemeName(old.Background); bg != "" {
 		s.LightTheme, s.DarkTheme = keroTheme(s.LightTheme, bg), keroTheme(s.DarkTheme, bg)
 	}
 	s.normalize()
-	if write(s) == nil {
+	if writeNew(s) == nil {
 		os.Rename(legacyPath(), legacyPath()+".migrated")
 	}
+	return nil
 }
 
 // Save writes the settings into the configuration, keeping what the user
@@ -288,6 +303,9 @@ func migrate() {
 func Save(s Settings) error {
 	mu.Lock()
 	defer mu.Unlock()
+	if migrationProblems := migrate(); len(migrationProblems) != 0 {
+		return fmt.Errorf("cannot save while Swift migration needs attention: %s", strings.Join(migrationProblems, "; "))
+	}
 	s.normalize()
 	if err := write(s); err != nil {
 		return err
@@ -385,6 +403,7 @@ func (s *Settings) normalize() {
 	oneOf(&s.SidebarRows, d.SidebarRows, "detailed", "compact")
 	oneOf(&s.Appearance, d.Appearance, "system", "light", "dark")
 	oneOf(&s.Language, d.Language, append([]string{"system"}, Languages...)...)
+	oneOf(&s.TerminalBackend, d.TerminalBackend, "libghostty", "alacritty")
 	oneOf(&s.Cursor, d.Cursor, "block", "bar", "underline")
 	oneOf(&s.Clipboard, d.Clipboard, "ask", "allow", "deny")
 	oneOf(&s.RightClick, d.RightClick, "menu", "paste", "copyOrPaste")
@@ -433,9 +452,8 @@ func keroThemeName(bg string) string {
 	return ""
 }
 
-// ParseHost reads a host as the configuration's host key writes it:
-// name=address, then its options: remote-control, color=<one of
-// HostColors>.
+// ParseHost reads a name=address followed by host options. Metadata values
+// use unpadded URL-safe base64 so arbitrary UTF-8 survives the line format.
 func ParseHost(line string) (Host, error) {
 	name, rest, ok := strings.Cut(strings.TrimSpace(line), "=")
 	name = strings.TrimSpace(name)
@@ -457,10 +475,26 @@ func ParseHost(line string) (Host, error) {
 			h.RemoteControl = true
 		case k == "color" && slices.Contains(HostColors, v):
 			h.Color = v
+		case k == "display-name64" || k == "uuid64" || k == "directory64":
+			value, err := base64.RawURLEncoding.DecodeString(v)
+			if err != nil {
+				return Host{}, fmt.Errorf("%s: invalid %s encoding: %w", name, k, err)
+			}
+			switch k {
+			case "display-name64":
+				h.DisplayName = string(value)
+			case "uuid64":
+				h.UUID = string(value)
+			case "directory64":
+				h.Directory = string(value)
+				if h.Directory != "" && (!strings.HasPrefix(h.Directory, "/") || strings.ContainsRune(h.Directory, 0)) {
+					return Host{}, fmt.Errorf("%s: startup directory must be absolute and contain no NUL", name)
+				}
+			}
 		case k == "color":
 			return Host{}, fmt.Errorf("%s: no color %q (%s)", name, v, strings.Join(HostColors, ", "))
 		default:
-			return Host{}, fmt.Errorf("%s: no option %q (remote-control, color=…)", name, o)
+			return Host{}, fmt.Errorf("%s: no option %q (remote-control, color=…, display-name64=…, uuid64=…, directory64=…)", name, o)
 		}
 	}
 	return h, nil

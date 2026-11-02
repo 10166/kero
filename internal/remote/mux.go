@@ -78,8 +78,9 @@ type buffered struct {
 
 // Options are what a client says of itself as it dials.
 type Options struct {
-	App    string // the version of Kero
-	Client string // "Kero 2.1.0 on laptop"
+	App    string    // the version of Kero
+	Client string    // "Kero 2.1.0 on laptop"
+	Prompt SSHPrompt // optional interactive OpenSSH authentication
 }
 
 // Conn is a remote connection: streams to kerod on a host.
@@ -96,7 +97,7 @@ func Dial(ctx context.Context, a Addr, o Options) (*Conn, error) {
 	c, err := dial(ctx, a, o)
 	// A shell remembered may have changed, as the SSH server's default:
 	// it is found again.
-	if err != nil && cached && ctx.Err() == nil && !errors.Is(err, ErrNotInstalled) && !errors.Is(err, ErrAuth) {
+	if err != nil && cached && ctx.Err() == nil && !errors.Is(err, ErrNotInstalled) && !errors.Is(err, ErrAuth) && !errors.Is(err, ErrSSHRejected) && !errors.Is(err, context.Canceled) {
 		shells.Delete(a.String())
 		return dial(ctx, a, o)
 	}
@@ -104,7 +105,7 @@ func Dial(ctx context.Context, a Addr, o Options) (*Conn, error) {
 }
 
 func dial(ctx context.Context, a Addr, o Options) (*Conn, error) {
-	tr, err := transport(ctx, a, o.Client)
+	tr, err := transport(ctx, a, o.Client, o.Prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +117,7 @@ func dial(ctx context.Context, a Addr, o Options) (*Conn, error) {
 		return c, err
 	}
 	shells.Store(a.String(), se.shell)
-	if tr, err = transport(ctx, a, o.Client); err == nil {
+	if tr, err = transport(ctx, a, o.Client, o.Prompt); err == nil {
 		c, err = handshake(ctx, tr, a, o)
 	}
 	if err != nil && !errors.Is(err, ErrNotInstalled) {

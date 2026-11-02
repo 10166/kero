@@ -1,6 +1,10 @@
 package daemon
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -31,12 +35,19 @@ const idleHold = 700 * time.Millisecond
 type pane struct {
 	d   *Daemon
 	sid string // the session's it belongs to
+	// writeMu orders input without blocking lease transitions.
+	writeMu       sync.Mutex
+	terminalInput interface {
+		Write([]byte) (int, error)
+		SetWriteDeadline(time.Time) error
+	}
 
 	// mu guards the fields below, and orders the output the emulator and
 	// the clients get with clients attaching. The emulator's callbacks
 	// (OnTitle, OnNotify) run within Feed, with mu held.
-	mu   sync.Mutex
-	info proto.Pane
+	mu       sync.Mutex
+	info     proto.Pane
+	inflight chan struct{} // active PTY write, guarded by mu
 	// cellW and cellH are the size of a cell in pixels on the client
 	// that last resized the pane, 0 until one did.
 	cellW, cellH int
@@ -45,11 +56,13 @@ type pane struct {
 	clients      map[*attachment]struct{}
 	// claimer is the client the user claimed the pane in last (claim), nil
 	// once it detached; stamp orders the clients' asks and claims.
-	claimer  *attachment
-	stamp    uint64
-	shellPID int
-	fgPGID   int
-	cwdAt    time.Time
+	claimer    *attachment
+	lease      *attachment
+	leaseToken string
+	stamp      uint64
+	shellPID   int
+	fgPGID     int
+	cwdAt      time.Time
 
 	dirty bool // output since the history on disk
 	// seen is what the screen showed when the status last came from it,
@@ -161,6 +174,7 @@ func (s *pane) start(command []string, env []string) error {
 	}
 	s.mu.Lock()
 	s.proc = proc
+	s.terminalInput = proc
 	s.shellPID = proc.PID()
 	s.info.PID = s.shellPID
 	s.info.Dir = dir
@@ -442,16 +456,26 @@ func (s *pane) screen() string {
 	return strings.Join(lines[max(0, len(lines)-s.info.Rows):], "\n") + "\n"
 }
 
-// input writes what the user typed to the program.
-func (s *pane) input(p []byte) {
+// input writes control-RPC input only when no attachment owns the pane.
+func (s *pane) input(p []byte) bool { return s.inputFrom(nil, p) }
+
+// inputFrom serializes the ownership check and write with lease changes.
+func (s *pane) inputFrom(c *attachment, p []byte) bool {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	proc := s.proc
+	if s.closed || c != nil && (c.revoked || !s.attachedLocked(c)) || s.lease != nil && s.lease != c {
+		s.mu.Unlock()
+		return false
+	}
+	if c != nil && typed(p) {
+		s.claimLocked(c)
+	}
+	writer := s.terminalInput
 	changed := false
 	if len(s.records) > 0 {
 		s.dismissFinished()
 	}
-	// Waiting is over once the user acts, unless the screen still asks,
-	// as a permission dialog does until it is answered.
 	if s.info.Status == proto.Waiting && !s.declared() && s.seen != detect.Blocked || s.info.Status == proto.Failed {
 		s.setStatus(proto.Idle)
 		s.info.Message = ""
@@ -461,13 +485,40 @@ func (s *pane) input(p []byte) {
 		s.info.Unread = false
 		changed = true
 	}
-	s.mu.Unlock()
-	if proc != nil {
-		proc.Write(p)
+	for len(p) > 0 && writer != nil {
+		if s.closed || c != nil && (c.revoked || !s.attachedLocked(c)) || s.lease != nil && s.lease != c || s.terminalInput != writer {
+			s.mu.Unlock()
+			return false
+		}
+		if err := writer.SetWriteDeadline(time.Time{}); err != nil && s.lease != nil {
+			s.mu.Unlock()
+			return false
+		}
+		done := make(chan struct{})
+		s.inflight = done
+		s.mu.Unlock()
+		n, err := writer.Write(p[:min(len(p), 4096)])
+		close(done)
+		s.mu.Lock()
+		if s.inflight == done {
+			s.inflight = nil
+		}
+		if err != nil || n <= 0 {
+			s.mu.Unlock()
+			return false
+		}
+		p = p[n:]
 	}
+	s.mu.Unlock()
 	if changed {
 		s.d.changed()
 	}
+	return true
+}
+
+func (s *pane) attachedLocked(c *attachment) bool {
+	_, ok := s.clients[c]
+	return ok
 }
 
 // setPage keeps the page a browser pane shows, as the app told it.
@@ -521,6 +572,9 @@ func (s *pane) resize(cols, rows, cellW, cellH int) {
 func (s *pane) ask(c *attachment, cols, rows, cellW, cellH int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if c.revoked {
+		return
+	}
 	c.asked = [4]int{cols, rows, cellW, cellH}
 	s.stamp++
 	c.askedAt = s.stamp
@@ -536,6 +590,14 @@ func (s *pane) ask(c *attachment, cols, rows, cellW, cellH int) {
 func (s *pane) claim(c *attachment) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.claimLocked(c)
+}
+
+// claimLocked applies size arbitration only for eligible attachments.
+func (s *pane) claimLocked(c *attachment) {
+	if c.revoked || s.lease != nil {
+		return
+	}
 	if s.claimer == c {
 		return
 	}
@@ -552,6 +614,12 @@ func (s *pane) claim(c *attachment) {
 // asked one, the one claimed in last, else, none claimed, the one that
 // asked last. s.mu is held.
 func (s *pane) sizer() *attachment {
+	if s.lease != nil {
+		if s.lease.asked[0] > 0 {
+			return s.lease
+		}
+		return nil
+	}
 	var best *attachment
 	for c := range s.clients {
 		if c.asked[0] <= 0 {
@@ -689,6 +757,7 @@ func (s *pane) exited(proc *ptyProc) {
 	}
 	code := proc.code
 	s.proc = nil
+	s.terminalInput = nil
 	s.dropLive()
 	s.info.ExitCode = code
 	s.info.Process, s.info.Agent, s.info.Runtime, s.info.PID = "", "", "", 0
@@ -741,6 +810,10 @@ func (s *pane) close() {
 	s.changed = make(chan struct{})
 	proc := s.proc
 	clients := s.clients
+	s.dropLease()
+	for c := range clients {
+		s.sendLease(c, "", false)
+	}
 	s.clients = map[*attachment]struct{}{}
 	s.mu.Unlock()
 	for c := range clients {
@@ -778,6 +851,7 @@ func (s *pane) attach(c *attachment) (first []byte, cols, rows int, ok bool) {
 	c.mirror = m
 	first, _ = m.Frame()
 	s.clients[c] = struct{}{}
+	s.sendLease(c, "", false)
 	return first, s.info.Cols, s.info.Rows, true
 }
 
@@ -787,6 +861,15 @@ func (s *pane) detach(c *attachment) {
 		delete(s.clients, c)
 		c.mirror.Close()
 	}
+	if s.lease == c {
+		if s.terminalInput != nil {
+			s.terminalInput.SetWriteDeadline(time.Now())
+		}
+		s.dropLease()
+		for other := range s.clients {
+			s.sendLease(other, "", false)
+		}
+	}
 	if s.claimer == c {
 		s.claimer = nil
 	}
@@ -794,6 +877,156 @@ func (s *pane) detach(c *attachment) {
 	// left on another machine would show it cut off at the gone one's.
 	s.fit()
 	s.mu.Unlock()
+}
+
+// sendLease sends a state with s.mu held.
+func (s *pane) sendLease(c *attachment, request string, granted bool) {
+	state := proto.LeaseState{Held: s.lease != nil, Owner: s.lease == c, Request: request, Granted: granted}
+	if granted && request == proto.LeaseAcquire && s.lease == c {
+		state.Token = s.leaseToken
+	}
+	payload, _ := json.Marshal(state)
+	c.send(proto.FrameLease, payload)
+}
+
+// leaseRequest serializes lease transitions with attachment input. Any
+// authenticated attachment can acquire; reclaim is local to this daemon.
+func (s *pane) leaseRequest(c *attachment, request string, local bool) {
+	// PTY writes are interrupted through their deadline; do not wait for them.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.clients[c]; !ok || s.closed {
+		return
+	}
+	old := s.lease
+	granted := false
+	switch request {
+	case proto.LeaseAcquire:
+		if !c.revoked && (s.lease == nil || s.lease == c) {
+			if s.lease == nil {
+				var secret [32]byte
+				if _, err := rand.Read(secret[:]); err != nil {
+					break
+				}
+				s.leaseToken = base64.RawURLEncoding.EncodeToString(secret[:])
+			}
+			if s.lease == nil && s.terminalInput != nil {
+				if err := s.terminalInput.SetWriteDeadline(time.Now()); err != nil {
+					s.leaseToken = ""
+					break
+				}
+			}
+			s.lease, granted = c, true
+			if s.claimer == c {
+				s.claimer = nil
+			}
+		}
+	case proto.LeaseRelease:
+		if s.lease == c {
+			c.revoked = true
+			if s.terminalInput != nil {
+				s.terminalInput.SetWriteDeadline(time.Now())
+			}
+			s.dropLease()
+			granted = true
+		}
+	case proto.LeaseReclaim:
+		if local {
+			if s.lease != nil && s.terminalInput != nil {
+				s.terminalInput.SetWriteDeadline(time.Now())
+			}
+			if s.lease != nil {
+				s.lease.revoked = true
+			}
+			s.dropLease()
+			granted = true
+		}
+	default:
+		return
+	}
+	if old != s.lease {
+		s.fit()
+		for other := range s.clients {
+			if other != c {
+				s.sendLease(other, "", false)
+			}
+		}
+	}
+	s.sendLease(c, request, granted)
+}
+
+// dropLease discards the controller's last size so an attached host
+// immediately resumes its own size when the controller is released.
+func (s *pane) dropLease() {
+	if s.lease != nil {
+		s.lease.asked = [4]int{}
+		s.lease.askedAt, s.lease.claimed = 0, 0
+		if s.claimer == s.lease {
+			s.claimer = nil
+		}
+		s.lease = nil
+		s.leaseToken = ""
+	}
+}
+
+// revokeLease authorizes a separate control connection with the active lease's
+// unguessable secret and invalidates the attachment before returning.
+func (s *pane) revokeLease(token string) bool {
+	s.mu.Lock()
+	if s.closed || s.lease == nil || len(token) != len(s.leaseToken) || subtle.ConstantTimeCompare([]byte(token), []byte(s.leaseToken)) != 1 {
+		s.mu.Unlock()
+		return false
+	}
+	owner := s.lease
+	inflight := s.inflight
+	owner.revoked = true
+	if s.terminalInput != nil {
+		s.terminalInput.SetWriteDeadline(time.Now())
+	}
+	s.dropLease()
+	s.fit()
+	for c := range s.clients {
+		s.sendLease(c, "", false)
+	}
+	s.mu.Unlock()
+	if inflight != nil {
+		<-inflight
+	}
+	return true
+}
+
+// snapshot replaces this attachment's mirror with a fresh one at the pane's
+// current size, ordered after earlier output and before later output.
+func (s *pane) snapshot(c *attachment) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fail := func(message string) {
+		c.send(proto.FrameSnapshot, append([]byte{1}, message...))
+	}
+	if s.closed || s.lease != c {
+		fail("attachment does not hold the lease")
+		return
+	}
+	m, err := s.term.NewMirror()
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	frame, later := m.Frame()
+	if len(frame) > proto.MaxSnapshot {
+		m.Close()
+		fail("snapshot exceeds size limit")
+		return
+	}
+	c.mirror.Close()
+	c.mirror = m
+	payload := make([]byte, 1, 5+len(frame))
+	payload = append(payload, proto.ResizePayload(s.info.Cols, s.info.Rows)...)
+	payload = append(payload, frame...)
+	c.send(proto.FrameSnapshot, payload)
+	if later {
+		s.frameSoon()
+	}
 }
 
 // history returns what to save of the session, when it changed: its
@@ -844,13 +1077,42 @@ type attachment struct {
 	// (pane.stamp); pane.mu guards them.
 	asked            [4]int
 	askedAt, claimed uint64
+	revoked          bool // host reclaimed this attachment's lease
 	out              chan []byte
+	input            chan []byte
 	once             sync.Once
 	done             chan struct{}
 }
 
 func newAttachment(conn net.Conn) *attachment {
-	return &attachment{conn: conn, out: make(chan []byte, 8192), done: make(chan struct{})}
+	return &attachment{conn: conn, out: make(chan []byte, 8192), input: make(chan []byte, 8), done: make(chan struct{})}
+}
+
+// controllerInput lets the connection reader observe disconnects even if
+// the controller has filled the PTY's input buffer.
+func (s *pane) controllerInput(c *attachment, payload []byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lease != c {
+		return false
+	}
+	select {
+	case c.input <- payload:
+	default:
+		c.finish()
+	}
+	return true
+}
+
+func (s *pane) consumeControllerInput(c *attachment) {
+	for {
+		select {
+		case p := <-c.input:
+			s.inputFrom(c, p)
+		case <-c.done:
+			return
+		}
+	}
 }
 
 func (a *attachment) send(kind byte, payload []byte) {

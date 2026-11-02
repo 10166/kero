@@ -25,11 +25,15 @@ import (
 	"kero/internal/clilink"
 	"kero/internal/daemon"
 	"kero/internal/proto"
+	"kero/internal/remote"
 
 	"kero/locales"
 )
 
 func main() {
+	if remote.IsSSHAskpass() {
+		os.Exit(remote.RunSSHAskpass())
+	}
 	if len(os.Args) > 1 {
 		switch {
 		case os.Args[1] == "__kerod":
@@ -97,6 +101,7 @@ func runApp() {
 			}
 		})
 	})
+	mygo.App.OnOpenURL(func(raw string) { a.update(func() { a.relayOpenedURL(raw) }) })
 	mygo.App.OnSecondInstance(func([]string, string) { a.showWindow() })
 	mygo.App.OnDidBecomeActive(func() {
 		mygo.ClearNotifications()
@@ -118,6 +123,8 @@ func runApp() {
 	// Windows leaves an icon in the notification area after its app until
 	// the pointer passes over it.
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		a.cancelSSHPrompts()
+		a.stopRelay()
 		if a.tray != nil {
 			a.tray.Destroy()
 		}
@@ -128,6 +135,7 @@ func runApp() {
 	}
 	mygo.App.WhenReady(func() {
 		a.openWindow()
+		a.startRelay()
 		a.applyTray()
 		a.applyGlobalShortcuts()
 		a.idleTime = mygo.Power.IdleTime

@@ -4,7 +4,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 
 	"kero/internal/proto"
@@ -75,7 +74,9 @@ func (a *App) setFocus(s *proto.Session, pane string) {
 	}
 	a.ensureTerm(pane)
 	a.touch(pane)
-	a.call(s.ID, "focus", proto.FocusParams{Session: s.ID, Pane: pane}, nil)
+	if a.hostOf(s.ID).relayID == "" {
+		a.call(s.ID, "focus", proto.FocusParams{Session: s.ID, Pane: pane}, nil)
+	}
 }
 
 // focusTerminal gives the keyboard to the pane the user is in.
@@ -146,6 +147,9 @@ func (a *App) divider(c *ui.Context, pal *palette, s *proto.Session, l *proto.La
 		d.Width(paneGap).Cursor(ui.CursorResizeColumn)
 	} else {
 		d.Height(paneGap).Cursor(ui.CursorResizeRow)
+	}
+	if a.hostOf(s.ID).relayID != "" {
+		return
 	}
 	if d.Hovered() || d.Pressed() {
 		// A short grip, so the gap shows it moves.
@@ -221,7 +225,7 @@ func (a *App) paneCard(c *ui.Context, pal *palette, bar ui.TitleBar, shown float
 
 	// Another pane dragged over this one: where it would go.
 	zone := zoneNone
-	if multi {
+	if multi && a.hostOf(s.ID).relayID == "" {
 		if d, over := ui.DragOver[paneDrag](card); over && d.session == s.ID && d.pane != p.ID {
 			if x, y, in := card.PointerPosition(); in {
 				b := a.paneRef("card-" + p.ID).Bounds(c)
@@ -240,11 +244,29 @@ func (a *App) paneCard(c *ui.Context, pal *palette, bar ui.TitleBar, shown float
 
 	dragging := false
 	card.Children(func() {
-		if p.Browser() {
+		if p.Browser() && a.hostOf(p.ID).relayID != "" {
+			a.paneHeader(c, pal, bar, shown, s, p, top, left, right, multi, focused, hovered)
+			ui.Column(c).Grow(1).Center().Children(func() {
+				ui.Text(c, locales.RelayPaneUnavailable()).FontSize(13).TextColor(pal.textMuted)
+			})
+		} else if p.Browser() {
 			// A browser's address bar is its header.
 			dragging = a.paneBrowser(c, pal, bar, shown, s, p, top, left, right, multi, focused, hovered)
 		} else {
 			dragging = a.paneHeader(c, pal, bar, shown, s, p, top, left, right, multi, focused, hovered)
+			if e := a.terms[p.ID]; e != nil && e.leaseHeld {
+				ui.Row(c.Key("remote-control")).AlignItems(ui.Center).Gap(8).Padding(6, 12).Children(func() {
+					ui.Text(c, locales.RelayControlledNotice()).FontSize(12).TextColor(pal.textMuted).Grow(1)
+					service, session, proxied := a.relayControl(p.ID)
+					if (proxied || !a.hostOf(p.ID).remote()) && e.stream != nil && button(c, "reclaim", locales.RelayTakeBack(), "", false, pal) {
+						if !a.hostOf(p.ID).remote() {
+							go e.stream.ReclaimLease()
+						} else {
+							service.Reclaim(session)
+						}
+					}
+				})
+			}
 			a.paneTerminal(c, pal, s, p)
 		}
 		if multi && !p.Browser() && a.set.DimUnfocused {
@@ -431,7 +453,7 @@ func (a *App) paneHeader(c *ui.Context, pal *palette, bar ui.TitleBar, shown flo
 		// The title is the pane's handle: dragged, it takes the pane to
 		// another place in the session.
 		grip := ui.Row(c.Key("grip")).Gap(8).AlignItems(ui.Center).Shrink(1).MinWidth(0).Height(28).Padding(0, 8).Margin(0, 0, 0, -8).Radius(8)
-		if multi {
+		if multi && a.hostOf(s.ID).relayID == "" {
 			grip.Drag(paneDrag{s.ID, p.ID}).Tooltip(locales.PaneDragTip())
 			dragging = grip.Dragging()
 			switch {
@@ -454,11 +476,14 @@ func (a *App) paneHeader(c *ui.Context, pal *palette, bar ui.TitleBar, shown flo
 			if !multi {
 				title, size = s.DisplayName(a.set.SessionName), 14
 			}
+			if multi && a.hostOf(p.ID).relayID != "" && p.Title != "" {
+				title = p.Title
+			}
 			name := ui.Text(c, title).FontSize(size).FontWeight(600).TextColor(pal.text).SingleLine().Ellipsis("…").Shrink(1).MinWidth(30)
 			if multi && !focused && !dragging {
 				name.TextColor(pal.textMuted)
 			}
-			if !multi && name.DoubleClicked() {
+			if !multi && a.hostOf(s.ID).relayID == "" && name.DoubleClicked() {
 				a.startRename(s.ID)
 			}
 			// The home directory names itself "~", which the title may
@@ -471,7 +496,7 @@ func (a *App) paneHeader(c *ui.Context, pal *palette, bar ui.TitleBar, shown flo
 					// The host's name in its color, as the sidebar's strip
 					// marks it: no pane passes for another machine's.
 					ui.Row(c.Key("where")).Shrink(2).MinWidth(0).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, h.name+":").FontSize(13).FontWeight(500).TextColor(pal.hostColor(h)).SingleLine().Shrink(0)
+						ui.Text(c, h.label()+":").FontSize(13).FontWeight(500).TextColor(pal.hostColor(h)).SingleLine().Shrink(0)
 						ui.Text(c, dir).FontSize(13).TextColor(pal.textFaint).SingleLine().Ellipsis("…").Shrink(1).MinWidth(0)
 					})
 				}
@@ -491,8 +516,10 @@ func (a *App) paneHeader(c *ui.Context, pal *palette, bar ui.TitleBar, shown flo
 		// The button that shows the right sidebar sits by the pane's own,
 		// as one row of buttons.
 		ui.Row(c.Key("buttons")).AlignItems(ui.Center).Children(func() {
-			a.paneControls(c, pal, s, p, (hovered || focused && multi) && !dragging, multi)
-			if top && right {
+			if a.hostOf(p.ID).relayID == "" {
+				a.paneControls(c, pal, s, p, (hovered || focused && multi) && !dragging, multi)
+			}
+			if top && right && a.hostOf(p.ID).relayID == "" {
 				a.showRightButton(c, pal)
 			}
 		})
@@ -618,7 +645,7 @@ func (a *App) paneTerminal(c *ui.Context, pal *palette, s *proto.Session, p *pro
 		switch {
 		case e != nil && e.term != nil:
 			ref := a.paneRef(p.ID)
-			terminal.View(c.Key("term"), e.term).Fill().Bind(ref)
+			terminalSurfaceView(c.Key("term"), e.term).Fill().Bind(ref)
 			if link, isPath, at := e.term.HoveredLink(); isPath {
 				a.imagePeek(p.ID, link, at, ref.Bounds(c))
 			}

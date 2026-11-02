@@ -278,6 +278,15 @@ func (c *Client) Call(method string, params, out any) error {
 	return nil
 }
 
+// RevokeLease revokes a controller using its secret acquire credential. The
+// response is returned only after the daemon has invalidated the attachment.
+func (c *Client) RevokeLease(paneID, token string) error {
+	if !c.Welcome.LeaseRevoke {
+		return errors.New("daemon does not support control lease revocation")
+	}
+	return c.Call("lease.revoke", proto.LeaseRevokeParams{Pane: paneID, Token: token}, nil)
+}
+
 // Go calls a method without waiting for its result, reporting an error to
 // fn when set.
 func (c *Client) Go(method string, params any, fn func(error)) {
@@ -308,6 +317,11 @@ type Stream struct {
 	// (FrameResized), within Read, before the output after them: set it
 	// before the first Read.
 	OnResized func(cols, rows int)
+	// OnLeaseState receives lease changes and request results in stream order.
+	// Set it before the first Read; callbacks run synchronously within Read.
+	OnLeaseState func(proto.LeaseState)
+	// OnSnapshot receives requested snapshots in stream order within Read.
+	OnSnapshot func(proto.Snapshot)
 }
 
 // Attach opens a session's stream. What reads from it gets frames of the
@@ -344,6 +358,15 @@ func (s *Stream) Read(p []byte) (int, error) {
 			if c, r, ok := proto.ParseResize(payload); ok && s.OnResized != nil {
 				s.OnResized(c, r)
 			}
+		case proto.FrameLease:
+			var state proto.LeaseState
+			if json.Unmarshal(payload, &state) == nil && s.OnLeaseState != nil {
+				s.OnLeaseState(state)
+			}
+		case proto.FrameSnapshot:
+			if snapshot, ok := proto.ParseSnapshot(payload); ok && s.OnSnapshot != nil {
+				s.OnSnapshot(snapshot)
+			}
 		}
 	}
 	n := copy(p, s.buf)
@@ -374,6 +397,36 @@ func (s *Stream) Claim() error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	return proto.WriteFrame(s.conn, proto.FrameClaim, nil)
+}
+
+// AcquireLease requests exclusive input and sizing for this attachment.
+// The result arrives through OnLeaseState while Read is running.
+func (s *Stream) AcquireLease() error { return s.leaseRequest(proto.LeaseAcquire) }
+
+// ReleaseLease releases a lease owned by this attachment.
+func (s *Stream) ReleaseLease() error { return s.leaseRequest(proto.LeaseRelease) }
+
+// ReclaimLease releases the current controller on behalf of the host.
+func (s *Stream) ReclaimLease() error { return s.leaseRequest(proto.LeaseReclaim) }
+
+func (s *Stream) leaseRequest(request string) error {
+	if !s.Welcome.Lease {
+		return errors.New("daemon does not support attachment leases")
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return proto.WriteFrame(s.conn, proto.FrameLease, []byte(request))
+}
+
+// RequestSnapshot requests a complete mirror after preceding stream frames.
+// The attachment must still own the lease when the daemon handles it.
+func (s *Stream) RequestSnapshot() error {
+	if !s.Welcome.Snapshot {
+		return errors.New("daemon does not support attachment snapshots")
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return proto.WriteFrame(s.conn, proto.FrameSnapshot, nil)
 }
 
 // UseTheme tells the daemon the colors the terminal shows, which programs

@@ -299,3 +299,23 @@ func TestMouseScrollMultiplier(t *testing.T) {
 		t.Errorf("a new file sets the default:\n%s", out)
 	}
 }
+
+func TestTerminalBackend(t *testing.T) {
+	if got := Default().TerminalBackend; got != "libghostty" {
+		t.Fatalf("default backend %q", got)
+	}
+	for _, backend := range []string{"libghostty", "alacritty"} {
+		s, problems := parse("terminal-backend = " + backend + "\n")
+		if len(problems) != 0 || s.TerminalBackend != backend {
+			t.Fatalf("backend %q: %q, %v", backend, s.TerminalBackend, problems)
+		}
+		back, problems := parse(format(s, ""))
+		if len(problems) != 0 || back.TerminalBackend != backend {
+			t.Fatalf("round trip %q: %q, %v", backend, back.TerminalBackend, problems)
+		}
+	}
+	s, problems := parse("terminal-backend = invalid\n")
+	if len(problems) == 0 || s.TerminalBackend != "libghostty" {
+		t.Fatalf("invalid backend: %q, %v", s.TerminalBackend, problems)
+	}
+}

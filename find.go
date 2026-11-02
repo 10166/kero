@@ -4,7 +4,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 
 	"kero/internal/proto"
@@ -83,7 +82,7 @@ func (a *App) closeFind() {
 }
 
 // findTerm returns the terminal of the pane searched.
-func (a *App) findTerm() *terminal.Terminal {
+func (a *App) findTerm() terminalSurface {
 	if e := a.terms[a.find.pane]; e != nil {
 		return e.term
 	}
@@ -92,7 +91,7 @@ func (a *App) findTerm() *terminal.Terminal {
 
 // findBar floats over the top right of the pane searched: the query, how
 // many matches it has, and the buttons going through them.
-func (a *App) findBar(c *ui.Context, pal *palette, p *proto.Pane, t *terminal.Terminal) {
+func (a *App) findBar(c *ui.Context, pal *palette, p *proto.Pane, t terminalSurface) {
 	f := &a.find
 	// A terminal attached anew, as settings change, searches again.
 	if f.query != "" && t.SearchStatus().Text != f.query {

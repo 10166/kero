@@ -152,6 +152,21 @@ func fakeSSH() {
 }
 
 func TestMain(m *testing.M) {
+	if os.Getenv("KERO_TEST_SSH_PROXY") != "" {
+		sshTestProxy()
+		os.Exit(0)
+	}
+	if os.Getenv("KERO_TEST_INSTALL_SSH") != "" {
+		sshTestInstall()
+		os.Exit(0)
+	}
+	if os.Getenv("KERO_TEST_FORGED_SOCKET") != "" {
+		sshTestForgedSocket()
+		os.Exit(0)
+	}
+	if IsSSHAskpass() {
+		os.Exit(RunSSHAskpass())
+	}
 	if os.Getenv("KERO_TEST_SHELL") != "" {
 		fakeSSH()
 	}
@@ -385,6 +400,45 @@ func TestMuxStreams(t *testing.T) {
 	}
 }
 
+type readStartedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *readStartedConn) Read(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Read(p)
+}
+
+func TestFlateCloseUnblocksRead(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	underlying := &readStartedConn{Conn: left, started: make(chan struct{})}
+	c := newFlateConn(underlying)
+	readDone := make(chan error, 1)
+	go func() { _, err := c.Read(make([]byte, 1)); readDone <- err }()
+	<-underlying.started
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- c.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the connection did not interrupt the blocked read")
+	}
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Fatal("read succeeded after close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("read remained blocked after close")
+	}
+}
+
 func TestMuxRefusesHostRequests(t *testing.T) {
 	s := echoServer(t)
 	s.Restart, s.Update = nil, nil
@@ -473,7 +527,10 @@ func TestBridgeScript(t *testing.T) {
 			os.MkdirAll(filepath.Dir(filepath.Join(home, loc)), 0o755)
 			os.WriteFile(filepath.Join(home, loc), []byte("#!/bin/sh\necho \"$0 $*\"\n"), 0o755)
 		}
-		cmd := exec.Command(sh, "-c", bridgeScript(Addr{Scheme: "ssh", Host: "x"}, "ssh"))
+		// The test must not discover and execute a real installation at an
+		// absolute system path while checking its temporary home directory.
+		lookup := `command() { case "$2" in "$HOME"/*) [ -x "$2" ] || return 1; printf '%s\n' "$2";; *) return 1;; esac; }; `
+		cmd := exec.Command(sh, "-c", lookup+bridgeScript(Addr{Scheme: "ssh", Host: "x"}, "ssh"))
 		cmd.Env = []string{"HOME=" + home, "PATH=" + home + "/none"}
 		out, err := cmd.Output()
 		if loc == "" {

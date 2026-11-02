@@ -233,6 +233,7 @@ func (a *App) attachQuick() {
 	q.e, q.pane = e, p.ID
 	id := p.ID
 	dialer := h.dialer()
+	backend := a.set.TerminalBackend
 	go func() {
 		stream, err := client.AttachVia(dialer, id)
 		if err != nil {
@@ -250,7 +251,7 @@ func (a *App) attachQuick() {
 		o.Transparent = false
 		o.Padding = terminal.Padding{X: 16, Y: 10}
 		o.OnCopy = nil // the window's toast is not in sight
-		term, err := terminal.New(o)
+		term, err := newTerminalSurface(backend, o)
 		if err != nil {
 			stream.Close()
 			q.win.Update(func() {
@@ -329,7 +330,7 @@ func (a *App) quickView(c *ui.Context) {
 	c.Root().Background(lookFor(c).term.Background)
 	switch {
 	case q.e != nil && q.e.term != nil:
-		terminal.View(c.Key("term"), q.e.term).Fill().Bind(&q.ref)
+		terminalSurfaceView(c.Key("term"), q.e.term).Fill().Bind(&q.ref)
 	case q.err != "" || q.e != nil && q.e.err != "":
 		detail := q.err
 		if q.e != nil {
@@ -347,7 +348,7 @@ func (a *App) quickView(c *ui.Context) {
 
 // quickTermFor returns the quick terminal's terminal when it shows a pane,
 // else nil.
-func (a *App) quickTermFor(id string) *terminal.Terminal {
+func (a *App) quickTermFor(id string) terminalSurface {
 	if q := &a.quick; q.pane == id && q.e != nil {
 		return q.e.term
 	}
@@ -356,7 +357,7 @@ func (a *App) quickTermFor(id string) *terminal.Terminal {
 
 // termFor returns the terminal of a pane, the window's or the quick
 // terminal's, else nil.
-func (a *App) termFor(id string) *terminal.Terminal {
+func (a *App) termFor(id string) terminalSurface {
 	if e := a.terms[id]; e != nil && e.term != nil {
 		return e.term
 	}

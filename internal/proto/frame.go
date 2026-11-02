@@ -46,7 +46,56 @@ const (
 	// claim it again; it goes back to the client claimed in before as this
 	// one detaches. A daemon before it ignores it.
 	FrameClaim byte = 'm'
+	// FrameLease carries a lease request (client → daemon) or state (daemon → client).
+	// Older daemons ignore it; Welcome.Lease advertises support.
+	FrameLease byte = 'l'
+	// FrameSnapshot requests a fresh mirror (empty payload), or returns a
+	// status byte, then either a four-byte size and mirror or an error string.
+	FrameSnapshot byte = 's'
 )
+
+// Lease request names also identify request responses in LeaseState.
+const (
+	LeaseAcquire = "acquire"
+	LeaseRelease = "release"
+	LeaseReclaim = "reclaim"
+)
+
+// LeaseState is sent to each attachment on changes and to the requester on
+// every request. Owner is relative to the receiving attachment.
+type LeaseState struct {
+	Held    bool   `json:"held"`
+	Owner   bool   `json:"owner"`
+	Request string `json:"request,omitempty"`
+	Granted bool   `json:"granted,omitempty"`
+	// Token is present only in a successful acquire response to its owner.
+	Token string `json:"token,omitempty"`
+}
+
+// MaxSnapshot is the largest full mirror carried by a snapshot frame.
+const MaxSnapshot = 16<<20 - 5
+
+// Snapshot is a complete terminal mirror at Cols by Rows, or an error.
+type Snapshot struct {
+	Cols, Rows int
+	Data       []byte
+	Error      string
+}
+
+// ParseSnapshot decodes a snapshot response.
+func ParseSnapshot(p []byte) (Snapshot, bool) {
+	if len(p) < 1 {
+		return Snapshot{}, false
+	}
+	if p[0] == 1 {
+		return Snapshot{Error: string(p[1:])}, true
+	}
+	if p[0] != 0 || len(p) < 5 {
+		return Snapshot{}, false
+	}
+	c, r, ok := ParseResize(p[1:5])
+	return Snapshot{Cols: c, Rows: r, Data: p[5:]}, ok
+}
 
 // What a FrameClear clears.
 const (

@@ -4,6 +4,25 @@ For anything larger than a fix, open an issue first —
 Kero says no to features that fit some other tool better, and it's kinder to find
 that out before the work.
 
+## Go/MyGo application
+
+Install the Go version in `go.mod` and, on macOS, a Rust toolchain. Build the
+Alacritty bridge before building or testing the app:
+
+```sh
+scripts/build-go-alacritty.sh
+GOFLAGS=-mod=mod CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo dev
+```
+
+The `GOFLAGS` setting keeps Go's module mode separate from the retained Swift
+project's `Vendor` directory on case-insensitive filesystems. MyGo defaults to
+disabling cgo, so `CGO_ENABLED=1` is required to include Alacritty on macOS.
+Run `GOFLAGS=-mod=mod go test ./...` after building the bridge. For a universal
+macOS package, install the `aarch64-apple-darwin` and `x86_64-apple-darwin`
+Rust targets and pass `--universal` to the bridge script.
+
+## Legacy Swift application
+
 ## Setup and build
 
 ```bash

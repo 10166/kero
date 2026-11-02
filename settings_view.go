@@ -880,6 +880,15 @@ func (a *App) terminalPage(c *ui.Context, pal *palette) {
 		})
 	})
 	settingsGroup(c, pal, "", "", func() {
+		settingRow(c, pal, locales.SetTerminalBackend(), locales.SetTerminalBackendDetail(), func() {
+			values, labels := []string{"libghostty"}, []string{"Ghostty"}
+			if alacrittyAvailable {
+				values, labels = append(values, "alacritty"), append(labels, "Alacritty")
+			}
+			segmented(c, "terminal-backend", &s.TerminalBackend, values, labels)
+		})
+	})
+	settingsGroup(c, pal, "", "", func() {
 		settingRow(c, pal, locales.SetDimUnfocused(), locales.SetDimUnfocusedDetail(), func() {
 			toggle(c.Key("dim-unfocused"), &s.DimUnfocused, pal)
 		})

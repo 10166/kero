@@ -28,9 +28,10 @@ import (
 // each with a connection of its own, so that one far away, or gone,
 // holds up no other.
 type host struct {
-	name string        // "" for this machine
-	cfg  settings.Host // a remote host's, as configured
-	addr remote.Addr
+	name    string        // "" for this machine
+	relayID string        // nonempty for an end-to-end encrypted relay device
+	cfg     settings.Host // a remote host's, as configured
+	addr    remote.Addr
 
 	rc        *remote.Conn // a remote host's connection, nil while there is none
 	cl        *client.Client
@@ -55,7 +56,10 @@ type host struct {
 	viewSent  *string
 	// busy is what the app does on the host for the user: install, update
 	// or restart.
-	busy string
+	busy          string
+	dialCancel    context.CancelFunc
+	installCancel context.CancelFunc
+	installGen    uint64
 }
 
 func (h *host) remote() bool { return h.name != "" }
@@ -85,6 +89,9 @@ func (d lostDialer) Dial() (net.Conn, error) {
 func (h *host) label() string {
 	if !h.remote() {
 		return locales.HostThisComputer()
+	}
+	if h.cfg.DisplayName != "" {
+		return h.cfg.DisplayName
 	}
 	return h.name
 }
@@ -209,7 +216,7 @@ func (a *App) hostOf(id string) *host {
 // hostNamed returns a remote host, by name, else nil.
 func (a *App) hostNamed(name string) *host {
 	for _, h := range a.hosts[1:] {
-		if strings.EqualFold(h.name, name) {
+		if h.relayID == "" && strings.EqualFold(h.name, name) {
 			return h
 		}
 	}
@@ -241,6 +248,11 @@ func (a *App) syncHosts() {
 		keep = append(keep, h)
 	}
 	for _, h := range a.hosts[1:] {
+		if h.relayID != "" {
+			keep = append(keep, h)
+		}
+	}
+	for _, h := range a.hosts[1:] {
 		if !slices.Contains(keep, h) {
 			a.closeHost(h)
 		}
@@ -268,6 +280,14 @@ func (a *App) syncHosts() {
 // sessions in the sidebar.
 func (a *App) closeHost(h *host) {
 	h.gen++
+	if h.dialCancel != nil {
+		h.dialCancel()
+		h.dialCancel = nil
+	}
+	if h.installCancel != nil {
+		h.installCancel()
+		h.installCancel = nil
+	}
 	a.dropTerms(h)
 	if h.cl != nil {
 		go h.cl.Close()
@@ -293,12 +313,17 @@ func (a *App) connect() { a.connectHost(a.local()) }
 // connectHost connects to a host's kerod: through the remote connection
 // it has, else a new one.
 func (a *App) connectHost(h *host) {
+	if h.dialCancel != nil {
+		h.dialCancel()
+	}
 	h.gen++
 	gen := h.gen
 	if h.conn != connReady {
 		h.conn = connConnecting
 	}
 	h.dialing = true
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	h.dialCancel = cancel
 	rc := h.rc
 	go func() {
 		var cl *client.Client
@@ -307,14 +332,14 @@ func (a *App) connectHost(h *host) {
 			cl, err = client.Connect(false)
 		} else {
 			if rc == nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				rc, err = remote.Dial(ctx, h.addr, remote.Options{App: mygo.App.Version(), Client: appClientName()})
-				cancel()
+				// The UI owns the cancellation function for this connection attempt.
+				rc, err = remote.Dial(ctx, h.addr, remote.Options{App: mygo.App.Version(), Client: appClientName(), Prompt: a.sshPrompt})
 			}
 			if err == nil {
 				cl, err = client.ConnectVia(rc)
 			}
 		}
+		cancel()
 		a.update(func() { a.connected(h, gen, rc, cl, err) })
 	}()
 }
@@ -342,6 +367,7 @@ func (a *App) connected(h *host, gen int, rc *remote.Conn, cl *client.Client, er
 		}
 		return
 	}
+	h.dialCancel = nil
 	h.dialing = false
 	if err == nil && h.remote() {
 		if other := a.sameKerod(h, rc, cl); other != nil {
@@ -552,7 +578,7 @@ func (a *App) remoteControl(h *host) bool {
 func (a *App) hostedName(s *proto.Session) string {
 	name := s.DisplayName(a.set.SessionName)
 	if h := a.hostOf(s.ID); h.remote() {
-		return name + " · " + h.name
+		return name + " · " + h.label()
 	}
 	return name
 }

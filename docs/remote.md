@@ -49,6 +49,18 @@ kero -H devbox new -n review -- claude
 If Kero isn't installed on a host you add, the sidebar says so and offers **Install Kero…**, which runs the script above on the host over SSH.
 :::
 
+## End-to-end encrypted relay
+
+The relay connects Kero apps on your own devices without exposing a kerod listener. It carries end-to-end encrypted terminal traffic between devices; the relay server handles sign-in and forwards encrypted messages. You need a relay server configured for Google sign-in and its HTTPS URL. HTTP is accepted only for a loopback server such as `http://localhost:8080`.
+
+On each device, open **Settings › Hosts › Relay**, enter the same relay URL, and choose **Sign in with Google**. Complete sign-in in the browser and return to Kero. The settings show the connection status and any errors. Credentials and the device's private keys are kept in the system credential store. The device list can be refreshed, and **Revoke** removes a device's access; sign out to remove the saved account credentials from this device.
+
+To share this device's workspace, turn on **Allow remote control on this device** in its relay settings. This is an explicit opt-in. Other online devices signed in to the same account can then see and control the workspace's terminal panes, including sessions on SSH, WSL and Tailscale hosts already connected in Kero. Turn it off to stop sharing and end active remote control.
+
+Opening a remote terminal gives one device exclusive control of that terminal at a time. The host shows when a terminal is remotely controlled and can choose **Take Back Control** to end the remote lease. Remote browser panes are unavailable, and terminal programs cannot read or write the controlling device's clipboard through the relay. These restrictions apply even if local clipboard access is allowed.
+
+If a device disconnects or the relay connection is lost, active remote control ends; the underlying host sessions continue running. Kero retries the relay connection, and an online host's workspace becomes available again once it reconnects. Reopen a remote terminal to request control again.
+
 ## How Kero reaches a host
 
 An address says how to reach a host. Kero takes the same address in Settings, in the configuration file and after `kero -H`.
@@ -66,11 +78,9 @@ Kero opens one connection per host and carries everything over it: the sidebar's
 
 Over SSH, Kero runs `kero __bridge` on the host, which starts kerod there if it isn't running and passes the connection to it. There is nothing to set up on the host beyond Kero itself, the app or the server build, and nothing listens on the network.
 
-Kero never prompts for anything over SSH, as there's no one to answer in the app:
+On macOS and Linux, Kero shows OpenSSH prompts for host-key verification, passwords, key passphrases and keyboard-interactive authentication. Check the host fingerprint before trusting a new key. On macOS, you can choose to save a password or passphrase in Keychain. Kero also uses your SSH configuration and the agent in `SSH_AUTH_SOCK`.
 
-- **Keys with a passphrase** need your SSH agent. Kero uses the agent your shell sets in `SSH_AUTH_SOCK`, as 1Password's, as `ssh` in a terminal does.
-- **A host you haven't connected to before** needs its key trusted first. Run `ssh me@devbox` once in a terminal.
-- **Password logins** aren't supported. Use a key.
+On Windows, SSH connections use keys and the SSH agent without interactive prompts. Trust a new host and unlock any protected key in a terminal before connecting.
 
 Kero looks for `kero` on the host in `~/.local/bin` (on Windows, `%LOCALAPPDATA%\Programs\kero-server`), the desktop app and its command line tool, and your `PATH`. If yours is elsewhere, name it in the address: `me@devbox?kero=/opt/kero/kero`, or on Windows `me@pc?kero=C:/kero/kero.exe`.
 

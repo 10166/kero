@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -84,6 +85,8 @@ func (p *ptyProc) Read(b []byte) (int, error) {
 }
 
 func (p *ptyProc) Write(b []byte) (int, error) { return p.master.Write(b) }
+
+func (p *ptyProc) SetWriteDeadline(t time.Time) error { return p.master.SetWriteDeadline(t) }
 
 // Resize resizes the terminal, a cell being cellW by cellH pixels (0 when
 // unknown).

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 
 	"kero/internal/remote"
@@ -21,8 +22,8 @@ import (
 // hostDraft is the Hosts page's form, which adds a host, or a host's,
 // which edits it.
 type hostDraft struct {
-	name, addr string
-	err        string
+	name, addr, displayName, directory string
+	err                                string
 	// editing is the name of the host edited, "" for none.
 	editing string
 }
@@ -32,11 +33,19 @@ type hostDraft struct {
 // `kero hosts` does.
 func (a *App) hostsPage(c *ui.Context, pal *palette) {
 	settingsGroup(c, pal, locales.SetHosts(), locales.SetHostsDetail(), func() {
-		if len(a.hosts) == 1 {
+		count := 0
+		for _, h := range a.hosts[1:] {
+			if h.relayID == "" {
+				count++
+			}
+		}
+		if count == 0 {
 			settingRow(c, pal, locales.SetHostsNone(), locales.SetHostsNoneDetail(), func() {})
 		}
 		for _, h := range a.hosts[1:] {
-			a.hostRow(c, pal, h)
+			if h.relayID == "" {
+				a.hostRow(c, pal, h)
+			}
 		}
 	})
 	docLink(c, pal, "hosts-docs", locales.SetHostsDocs(), "https://kero.sh/docs/remote")
@@ -54,6 +63,7 @@ func (a *App) hostsPage(c *ui.Context, pal *palette) {
 			ui.Text(c, d.err).FontSize(12).TextColor(pal.danger).Padding(0, 0, 10, 0)
 		}
 	})
+	a.relaySettingsGroup(c, pal)
 	a.listenGroup(c, pal)
 	settingsGroup(c, pal, locales.SetHostSettingsSplit(), locales.SetHostSettingsSplitDetail(), nil)
 }
@@ -165,7 +175,7 @@ func (a *App) hostRow(c *ui.Context, pal *palette, h *host) {
 			ui.Icon(c, hostIcon).Size(16, 16).TextColor(pal.textMuted).Shrink(0)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, h.name).FontSize(13.5).FontWeight(600).TextColor(pal.text).SingleLine()
+					ui.Text(c, h.label()).FontSize(13.5).FontWeight(600).TextColor(pal.text).SingleLine()
 					ui.Text(c, h.addr.String()).Font("monospace").FontSize(12).TextColor(pal.textMuted).SingleLine().Ellipsis("…").MinWidth(0).Selectable()
 				})
 				col := pal.textMuted
@@ -175,7 +185,7 @@ func (a *App) hostRow(c *ui.Context, pal *palette, h *host) {
 				ui.Text(c, status).FontSize(12).TextColor(col).LineHeight(1.35).Selectable()
 			})
 			iconButton(c, "edit", editIcon, locales.HostEdit(), pal, func() {
-				a.ss.hostEdit = hostDraft{name: h.name, addr: h.cfg.Addr, editing: h.name}
+				a.ss.hostEdit = hostDraft{name: h.name, addr: h.cfg.Addr, displayName: h.cfg.DisplayName, directory: h.cfg.Directory, editing: h.name}
 			})
 			iconButton(c, "reconnect", reloadIcon, locales.HostReconnect(), pal, func() { a.reconnectHost(h) })
 			iconButton(c, "remove", closeIcon, locales.HostRemove(), pal, func() { a.ss.confirm = a.removeHostConfirmation(h) })
@@ -183,7 +193,7 @@ func (a *App) hostRow(c *ui.Context, pal *palette, h *host) {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(0, 0, 0, 26).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Text(c, locales.SetHostRemoteControl()).FontSize(12.5).TextColor(pal.text)
-				ui.Text(c, locales.SetHostRemoteControlDetail(h.name)).FontSize(12).TextColor(pal.textMuted).LineHeight(1.35)
+				ui.Text(c, locales.SetHostRemoteControlDetail(h.label())).FontSize(12).TextColor(pal.textMuted).LineHeight(1.35)
 			})
 			// The switch shows the host's setting, which a click writes back.
 			on, name := h.cfg.RemoteControl, h.name
@@ -204,7 +214,7 @@ func (a *App) hostRow(c *ui.Context, pal *palette, h *host) {
 					a.installOnHost(h)
 				}
 			case h.conn == connVersion || h.behind():
-				if button(c, "update", locales.HostUpdateAction(h.name), "", true, pal) {
+				if button(c, "update", locales.HostUpdateAction(h.label()), "", true, pal) {
 					a.offerHostUpdate(h)
 				}
 			}
@@ -226,6 +236,18 @@ func (a *App) hostEditor(c *ui.Context, pal *palette, h *host) {
 			if fieldButton(c, "edit-save", locales.CommonSave(), true, pal) {
 				save()
 			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				label := locales.Catalog.Format(i18n.Locale(), "setHostDisplayName", nil)
+				ui.Text(c, label).FontSize(12).TextColor(pal.textMuted)
+				textField(c, "edit-display-name", &d.displayName, label, 0, pal).OnSubmit(func() { a.saveHost(h) })
+			})
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				label := locales.Catalog.Format(i18n.Locale(), "setHostDirectory", nil)
+				ui.Text(c, label).FontSize(12).TextColor(pal.textMuted)
+				textField(c, "edit-directory", &d.directory, label, 0, pal).Font("monospace").OnSubmit(func() { a.saveHost(h) })
+			})
 		})
 		if d.err != "" {
 			ui.Text(c, d.err).FontSize(12).TextColor(pal.danger)
@@ -255,13 +277,17 @@ func (a *App) saveHost(h *host) {
 		d.err = locales.SetHostNameTaken(parsed.Name)
 		return
 	}
+	if d.directory != "" && (!strings.HasPrefix(d.directory, "/") || strings.ContainsRune(d.directory, 0)) {
+		d.err = locales.Catalog.Format(i18n.Locale(), "setHostDirectoryInvalid", nil)
+		return
+	}
 	s := a.set.Clone()
 	cfg := s.Host(h.name)
 	if cfg == nil { // removed meanwhile
 		*d = hostDraft{}
 		return
 	}
-	cfg.Name, cfg.Addr = parsed.Name, parsed.Addr
+	cfg.Name, cfg.Addr, cfg.DisplayName, cfg.Directory = parsed.Name, parsed.Addr, d.displayName, d.directory
 	// syncHosts finds the host by its new name, and keeps it while its
 	// address stays.
 	h.name = parsed.Name
@@ -275,11 +301,11 @@ func errorsIsNotInstalled(h *host) bool { return errors.Is(h.errKind, remote.Err
 func (a *App) hostStatus(h *host) string {
 	switch {
 	case h.busy == "install":
-		return locales.HostInstalling(h.name)
+		return locales.HostInstalling(h.label())
 	case h.busy == "update":
-		return locales.HostUpdating(h.name)
+		return locales.HostUpdating(h.label())
 	case h.busy == "restart":
-		return locales.HostRestarting(h.name)
+		return locales.HostRestarting(h.label())
 	case h.conn == connConnecting && h.loaded:
 		return locales.HostReconnecting()
 	case h.conn == connConnecting:

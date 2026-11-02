@@ -58,6 +58,18 @@ type Welcome struct {
 	// Attach only: the size of the snapshot that follows.
 	Cols int `json:"cols,omitempty"`
 	Rows int `json:"rows,omitempty"`
+	// Lease indicates support for exclusive attachment leases.
+	Lease bool `json:"lease,omitempty"`
+	// Snapshot indicates support for ordered attachment snapshots.
+	Snapshot bool `json:"snapshot,omitempty"`
+	// LeaseRevoke advertises revocation over a separate control connection.
+	LeaseRevoke bool `json:"lease_revoke,omitempty"`
+}
+
+// LeaseRevokeParams identifies an active lease by its secret credential.
+type LeaseRevokeParams struct {
+	Pane  string `json:"pane"`
+	Token string `json:"token"`
 }
 
 // Request is a call on a control connection.

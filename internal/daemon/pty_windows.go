@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -142,10 +144,11 @@ func startPTY(o ptyOptions) (*ptyProc, error) {
 	}
 	// The console reads what is typed from inR and writes the output to
 	// outW; the daemon writes to inW and reads outR.
-	var inR, inW, outR, outW windows.Handle
-	if err := windows.CreatePipe(&inR, &inW, nil, 0); err != nil {
+	inR, inW, err := conptyInputPipe()
+	if err != nil {
 		return nil, fmt.Errorf("pty: %w", err)
 	}
+	var outR, outW windows.Handle
 	if err := windows.CreatePipe(&outR, &outW, nil, 0); err != nil {
 		windows.CloseHandle(inR)
 		windows.CloseHandle(inW)
@@ -180,6 +183,35 @@ func startPTY(o ptyOptions) (*ptyProc, error) {
 	}
 	go p.wait()
 	return p, nil
+}
+
+// conptyInputPipe uses an overlapped writer so a lease transition can
+// interrupt a blocked input write without closing the console.
+func conptyInputPipe() (windows.Handle, windows.Handle, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return 0, 0, err
+	}
+	name, err := windows.UTF16PtrFromString(fmt.Sprintf(`\\.\pipe\kero-pty-%x`, nonce))
+	if err != nil {
+		return 0, 0, err
+	}
+	w, err := windows.CreateNamedPipe(name, windows.PIPE_ACCESS_OUTBOUND|windows.FILE_FLAG_OVERLAPPED|windows.FILE_FLAG_FIRST_PIPE_INSTANCE, windows.PIPE_TYPE_BYTE|windows.PIPE_REJECT_REMOTE_CLIENTS, 1, 4096, 4096, 0, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	r, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		windows.CloseHandle(w)
+		return 0, 0, err
+	}
+	var overlapped windows.Overlapped
+	if err = windows.ConnectNamedPipe(w, &overlapped); err != nil && !errors.Is(err, windows.ERROR_PIPE_CONNECTED) {
+		windows.CloseHandle(r)
+		windows.CloseHandle(w)
+		return 0, 0, err
+	}
+	return r, w, nil
 }
 
 func (p *ptyProc) spawn(o ptyOptions) error {
@@ -258,6 +290,8 @@ func (p *ptyProc) Read(b []byte) (int, error) {
 }
 
 func (p *ptyProc) Write(b []byte) (int, error) { return p.in.Write(b) }
+
+func (p *ptyProc) SetWriteDeadline(t time.Time) error { return p.in.SetWriteDeadline(t) }
 
 // Resize resizes the console; ConPTY has no size in pixels. A new width
 // and height go one after the other, the width first: the console, given

@@ -33,6 +33,17 @@ func (d *Daemon) call(c *controlConn, method string, raw json.RawMessage) (any, 
 	case "state":
 		return d.state(), nil
 
+	case "lease.revoke":
+		var p proto.LeaseRevokeParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		pn := d.findPane(p.Pane)
+		if pn == nil || !pn.revokeLease(p.Token) {
+			return nil, errors.New("invalid or expired lease credential")
+		}
+		return true, nil
+
 	case "subscribe", "watch":
 		// A watcher, as kero events, hears what an app does but is no app
 		// (Daemon.watchers). The first state goes out under the lock the
@@ -199,7 +210,9 @@ func (d *Daemon) call(c *controlConn, method string, raw json.RawMessage) (any, 
 		if pn.term == nil {
 			return nil, fmt.Errorf("pane %s is a browser, which takes no input", pn.info.ID)
 		}
-		pn.input([]byte(p.Data))
+		if !pn.input([]byte(p.Data)) {
+			return nil, errors.New("pane input is held by a remote controller")
+		}
 		return true, nil
 
 	case "pane.page":

@@ -1,11 +1,15 @@
 package remote
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"kero/internal/shell"
@@ -48,6 +52,56 @@ func InstallCommand(a Addr, version string, batch bool) (*exec.Cmd, error) {
 	}
 	hideWindow(cmd)
 	return cmd, nil
+}
+
+// InstallInteractive runs the normal installer with cancellable OpenSSH
+// prompts. Without a prompt, or where peer identity is unavailable, it uses
+// batch authentication just like InstallCommand's noninteractive mode.
+func InstallInteractive(ctx context.Context, a Addr, version string, prompt SSHPrompt) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	interactive := a.Scheme == "ssh" && prompt != nil && sshPeerSupported()
+	base, err := InstallCommand(a, version, !interactive)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, base.Path, base.Args[1:]...)
+	cmd.Env = base.Env
+	hideWindow(cmd)
+	var helper *sshAskpassServer
+	cmd.WaitDelay = 2 * time.Second
+	if interactive {
+		helper, err = newSSHAskpassServer(ctx, a, prompt)
+		if err != nil {
+			return nil, err
+		}
+		defer helper.close()
+		cmd.Args = append([]string{cmd.Args[0], "-F", helper.config, "-o", "BatchMode=no", "-o", "StrictHostKeyChecking=ask"}, cmd.Args[1:]...)
+		cmd.Env = append(sshEnv(), helper.env()...)
+	} else if a.Scheme == "ssh" {
+		cmd.Env = append(cmd.Env, "SSH_ASKPASS_REQUIRE=never")
+	}
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	if helper != nil {
+		if err := helper.bind(cmd.Process.Pid); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			return output.Bytes(), fmt.Errorf("identifying SSH process: %w", err)
+		}
+	}
+	err = cmd.Wait()
+	if ctx.Err() != nil {
+		return output.Bytes(), ctx.Err()
+	}
+	if helper != nil && helper.failure() != nil {
+		return output.Bytes(), helper.failure()
+	}
+	return output.Bytes(), err
 }
 
 // shInstall is the script of sh that installs Kero: install-server.sh, or

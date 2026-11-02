@@ -61,8 +61,17 @@ kero config check             # report unknown keys and bad values
 
 ## Terminal
 
+Choose the terminal engine in **Settings › Terminal**, or set `terminal-backend` in the configuration file. The default is `libghostty`; `alacritty` selects the Alacritty engine on macOS. Changing the setting reattaches displayed terminal views to their existing sessions.
+
+Both engines use Kero's terminal settings and themes, but their emulation and rendering are independent, so terminal escape sequences, text shaping and graphics may differ. In particular, Alacritty draws individual terminal cells, so ligatures across cells may not appear as they do with libghostty.
+
+```ini
+terminal-backend = alacritty
+```
+
 | Key                   | Default | Description                                                              |
 | --------------------- | ------- | ------------------------------------------------------------------------ |
+| `terminal-backend`    | `libghostty` | Terminal engine: `libghostty` or `alacritty`                         |
 | `theme`               | `paper` | The theme of the window, its panes and terminals: one of Kero's (`petal`, `mist`, `meadow`, `dusk`, `tide`, `apricot`, `aurora`, `dune`, `paper` or `plain`), any Ghostty theme, or one for each appearance, as `light:paper,dark:dusk` |
 | `font-family`         |         | Empty for JetBrains Mono Nerd Font, which Kero includes; `monospace` for the system's; or any installed family |
 | `font-size`           | `13`    | In points                                                                |

@@ -126,6 +126,7 @@ func (a *App) showWindow() {
 // windowClosed lets go of what the main window showed: its panes'
 // terminals and pages, which a window made anew attaches again.
 func (a *App) windowClosed() {
+	a.cancelSSHPrompts()
 	a.winOpen, a.focused = false, false
 	for id := range a.terms {
 		a.dropTerm(id)

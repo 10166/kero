@@ -194,10 +194,9 @@ func bridgeScript(a Addr, via string) string {
 // shellQuote quotes s for a POSIX shell.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// sshArgs are the arguments of ssh(1) that run the bridge on a host. It
-// never asks anything, as there is no one to answer in the app: a key
-// with a passphrase needs the agent, and a host's key needs trusting in a
-// terminal first. It notices a dead link itself, as the mux does.
+// sshArgs runs the bridge in batch mode by default; an interactive UI
+// supplies its own askpass settings when peer verification is supported.
+// Keepalive notices a dead link, as the mux does.
 func sshArgs(a Addr) []string {
 	args := []string{"-T",
 		"-o", "BatchMode=yes",
@@ -226,10 +225,29 @@ func SSHCommand() string {
 
 // transport opens the byte stream to a host that a remote connection runs
 // over.
-func transport(ctx context.Context, a Addr, client string) (io.ReadWriteCloser, error) {
+func transport(ctx context.Context, a Addr, client string, prompt SSHPrompt) (io.ReadWriteCloser, error) {
 	switch a.Scheme {
 	case "ssh":
-		return startBridge(exec.Command(SSHCommand(), sshArgs(a)...), true)
+		cmd := exec.Command(SSHCommand(), sshArgs(a)...)
+		var helper *sshAskpassServer
+		if prompt != nil && sshPeerSupported() {
+			var err error
+			helper, err = newSSHAskpassServer(ctx, a, prompt)
+			if err != nil {
+				return nil, err
+			}
+			// Command-line options precede the destination and override user config.
+			cmd.Args = append([]string{cmd.Args[0], "-F", helper.config, "-o", "BatchMode=no", "-o", "StrictHostKeyChecking=ask"}, cmd.Args[1:]...)
+			cmd.Env = append(sshEnv(), helper.env()...)
+		}
+		c, err := startBridge(cmd, true, helper)
+		if err != nil {
+			if helper != nil {
+				helper.close()
+			}
+			return nil, err
+		}
+		return c, nil
 	case "wsl":
 		if runtime.GOOS != "windows" {
 			return nil, errors.New("wsl:// addresses are of Windows")
@@ -240,7 +258,7 @@ func transport(ctx context.Context, a Addr, client string) (io.ReadWriteCloser, 
 		}
 		// --exec runs sh itself, not through the distribution's shell.
 		args = append(args, "--exec", "sh", "-c", bridgeScript(a, "wsl"))
-		return startBridge(exec.Command("wsl.exe", args...), false)
+		return startBridge(exec.Command("wsl.exe", args...), false, nil)
 	case "http", "https":
 		scheme := "ws"
 		if a.Scheme == "https" {
@@ -286,28 +304,29 @@ func httpError(resp *http.Response, err error) string {
 // is read, or the connection closed: Wait closes the pipe it reads from,
 // and would drop what is still in it, as the bridge's last words.
 type cmdConn struct {
-	cmd    *exec.Cmd
-	ssh    bool // ssh's, whose host may run Windows
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	stderr tail
-	eof    chan struct{} // closed once stdout ended, or the connection closed
-	eofs   sync.Once
-	done   chan struct{} // closed once the program ended
-	once   sync.Once
-	err    error // the program's end, once done
+	cmd     *exec.Cmd
+	ssh     bool // ssh's, whose host may run Windows
+	stdin   io.WriteCloser
+	stdout  io.ReadCloser
+	stderr  tail
+	eof     chan struct{} // closed once stdout ended, or the connection closed
+	eofs    sync.Once
+	done    chan struct{} // closed once the program ended
+	once    sync.Once
+	err     error // the program's end, once done
+	askpass *sshAskpassServer
 }
 
-func startBridge(cmd *exec.Cmd, ssh bool) (*cmdConn, error) {
-	c := &cmdConn{cmd: cmd, ssh: ssh, eof: make(chan struct{}), done: make(chan struct{})}
+func startBridge(cmd *exec.Cmd, ssh bool, helper *sshAskpassServer) (*cmdConn, error) {
+	c := &cmdConn{cmd: cmd, ssh: ssh, askpass: helper, eof: make(chan struct{}), done: make(chan struct{})}
 	hideWindow(cmd)
-	// Never a prompt, as there is no one to answer; wsl.exe's errors in
-	// UTF-8, which it writes in UTF-16 otherwise.
-	env := os.Environ()
-	if ssh {
-		env = sshEnv()
+	if cmd.Env == nil {
+		env := os.Environ()
+		if ssh {
+			env = sshEnv()
+		}
+		cmd.Env = append(env, "SSH_ASKPASS_REQUIRE=never", "WSL_UTF8=1")
 	}
-	cmd.Env = append(env, "SSH_ASKPASS_REQUIRE=never", "WSL_UTF8=1")
 	// A program that keeps the pipes open after its own end, as a
 	// ProxyCommand's child, holds up nothing.
 	cmd.WaitDelay = 2 * time.Second
@@ -324,6 +343,13 @@ func startBridge(cmd *exec.Cmd, ssh bool) (*cmdConn, error) {
 			return nil, fmt.Errorf("%s is not installed: Kero reaches the host with it", cmd.Path)
 		}
 		return nil, err
+	}
+	if helper != nil {
+		if err := helper.bind(cmd.Process.Pid); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			return nil, fmt.Errorf("identifying SSH process: %w", err)
+		}
 	}
 	go func() {
 		<-c.eof
@@ -349,6 +375,9 @@ func (c *cmdConn) Write(p []byte) (int, error) { return c.stdin.Write(p) }
 // bridge, then, should it linger, a kill.
 func (c *cmdConn) Close() error {
 	c.once.Do(func() {
+		if c.askpass != nil {
+			c.askpass.close()
+		}
 		c.stdin.Close()
 		select {
 		case <-c.eof:
@@ -369,6 +398,11 @@ func (c *cmdConn) failure() error {
 	case <-time.After(3 * time.Second):
 		c.cmd.Process.Kill()
 		<-c.done
+	}
+	if c.askpass != nil {
+		if err := c.askpass.failure(); err != nil {
+			return err
+		}
 	}
 	msg := c.stderr.last()
 	code := -1

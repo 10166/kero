@@ -92,7 +92,9 @@ func (a *App) view(c *ui.Context) {
 		c.Toast(a.pendingToast)
 		a.pendingToast = ""
 	}
-	a.shortcuts(c)
+	if !a.sshAuth.active() {
+		a.shortcuts(c)
+	}
 
 	bar := c.TitleBar()
 	row := ui.Row(c).Fill().AlignItems(ui.Stretch)
@@ -108,6 +110,9 @@ func (a *App) view(c *ui.Context) {
 	// shows at once as the app opens with it shown, without a session for
 	// a moment, and goes at once with the panes.
 	work := a.workSession()
+	if a.selectedHost().relayID != "" {
+		work = nil
+	}
 	rightW := a.rightWidth()
 	// In a window too narrow for it beside the cards, it gets out of their
 	// way, coming back as the window widens, unless shown anyway.
@@ -184,6 +189,7 @@ func (a *App) view(c *ui.Context) {
 	a.pickerView(c, pal)
 	a.confirmView(c, pal)
 	a.worktreeView(c, pal)
+	a.sshDialog(c, pal)
 	// A preview that showed no more fades in anew next time.
 	if !a.previewShown {
 		a.previewKey = ""
@@ -391,7 +397,7 @@ func (a *App) groupView(c *ui.Context, pal *palette, g group, gi int, n *int) {
 		m.Separator()
 		// A remote group's menu has its host's, as the host has no header.
 		if g.host.remote() {
-			m.Submenu(g.host.name, func(m *ui.Menu) { a.hostMenu(m, g.host) })
+			m.Submenu(g.host.label(), func(m *ui.Menu) { a.hostMenu(m, g.host) })
 		}
 		// Close All Sessions ends the sessions the project holds, not the
 		// project itself, asking first as closing the project does: what

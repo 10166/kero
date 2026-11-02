@@ -36,6 +36,396 @@ type Messages struct{ locale string }
 // source language.
 func In(locale string) Messages { return Messages{locale} }
 
+// SshAuthentication says "SSH authentication"
+// in the language the app shows.
+func SshAuthentication() string { return In(i18n.Locale()).SshAuthentication() }
+
+// SshAuthentication says "SSH authentication"
+// in the language of msgs.
+func (msgs Messages) SshAuthentication() string {
+	return Catalog.Format(msgs.locale, "sshAuthentication", nil)
+}
+
+// SshVerifyHostKey says "Verify SSH host key"
+// in the language the app shows.
+func SshVerifyHostKey() string { return In(i18n.Locale()).SshVerifyHostKey() }
+
+// SshVerifyHostKey says "Verify SSH host key"
+// in the language of msgs.
+func (msgs Messages) SshVerifyHostKey() string {
+	return Catalog.Format(msgs.locale, "sshVerifyHostKey", nil)
+}
+
+// SshConnection says "SSH connection"
+// in the language the app shows.
+func SshConnection() string { return In(i18n.Locale()).SshConnection() }
+
+// SshConnection says "SSH connection"
+// in the language of msgs.
+func (msgs Messages) SshConnection() string {
+	return Catalog.Format(msgs.locale, "sshConnection", nil)
+}
+
+// SshFingerprint says "Fingerprint: {fingerprint}"
+// in the language the app shows.
+func SshFingerprint(fingerprint string) string { return In(i18n.Locale()).SshFingerprint(fingerprint) }
+
+// SshFingerprint says "Fingerprint: {fingerprint}"
+// in the language of msgs.
+func (msgs Messages) SshFingerprint(fingerprint string) string {
+	return Catalog.Format(msgs.locale, "sshFingerprint", map[string]any{"fingerprint": fingerprint})
+}
+
+// SshResponse says "SSH response"
+// in the language the app shows.
+func SshResponse() string { return In(i18n.Locale()).SshResponse() }
+
+// SshResponse says "SSH response"
+// in the language of msgs.
+func (msgs Messages) SshResponse() string {
+	return Catalog.Format(msgs.locale, "sshResponse", nil)
+}
+
+// SshSavedCredential says "A saved credential is filled in."
+// in the language the app shows.
+func SshSavedCredential() string { return In(i18n.Locale()).SshSavedCredential() }
+
+// SshSavedCredential says "A saved credential is filled in."
+// in the language of msgs.
+func (msgs Messages) SshSavedCredential() string {
+	return Catalog.Format(msgs.locale, "sshSavedCredential", nil)
+}
+
+// SshSaveInKeychain says "Save in Keychain"
+// in the language the app shows.
+func SshSaveInKeychain() string { return In(i18n.Locale()).SshSaveInKeychain() }
+
+// SshSaveInKeychain says "Save in Keychain"
+// in the language of msgs.
+func (msgs Messages) SshSaveInKeychain() string {
+	return Catalog.Format(msgs.locale, "sshSaveInKeychain", nil)
+}
+
+// SshKeychainSaveFailed says "Could not save the SSH credential to Keychain"
+// in the language the app shows.
+func SshKeychainSaveFailed() string { return In(i18n.Locale()).SshKeychainSaveFailed() }
+
+// SshKeychainSaveFailed says "Could not save the SSH credential to Keychain"
+// in the language of msgs.
+func (msgs Messages) SshKeychainSaveFailed() string {
+	return Catalog.Format(msgs.locale, "sshKeychainSaveFailed", nil)
+}
+
+// SshReject says "Reject"
+// in the language the app shows.
+func SshReject() string { return In(i18n.Locale()).SshReject() }
+
+// SshReject says "Reject"
+// in the language of msgs.
+func (msgs Messages) SshReject() string {
+	return Catalog.Format(msgs.locale, "sshReject", nil)
+}
+
+// SshContinue says "Continue"
+// in the language the app shows.
+func SshContinue() string { return In(i18n.Locale()).SshContinue() }
+
+// SshContinue says "Continue"
+// in the language of msgs.
+func (msgs Messages) SshContinue() string {
+	return Catalog.Format(msgs.locale, "sshContinue", nil)
+}
+
+// SshTrustAndContinue says "Trust and continue"
+// in the language the app shows.
+func SshTrustAndContinue() string { return In(i18n.Locale()).SshTrustAndContinue() }
+
+// SshTrustAndContinue says "Trust and continue"
+// in the language of msgs.
+func (msgs Messages) SshTrustAndContinue() string {
+	return Catalog.Format(msgs.locale, "sshTrustAndContinue", nil)
+}
+
+// SetHostDisplayName says "Display name (optional)"
+// in the language the app shows.
+func SetHostDisplayName() string { return In(i18n.Locale()).SetHostDisplayName() }
+
+// SetHostDisplayName says "Display name (optional)"
+// in the language of msgs.
+func (msgs Messages) SetHostDisplayName() string {
+	return Catalog.Format(msgs.locale, "setHostDisplayName", nil)
+}
+
+// SetHostDirectory says "Startup directory (optional)"
+// in the language the app shows.
+func SetHostDirectory() string { return In(i18n.Locale()).SetHostDirectory() }
+
+// SetHostDirectory says "Startup directory (optional)"
+// in the language of msgs.
+func (msgs Messages) SetHostDirectory() string {
+	return Catalog.Format(msgs.locale, "setHostDirectory", nil)
+}
+
+// SetHostDirectoryInvalid says "Startup directory must be an absolute path without NUL characters."
+// in the language the app shows.
+func SetHostDirectoryInvalid() string { return In(i18n.Locale()).SetHostDirectoryInvalid() }
+
+// SetHostDirectoryInvalid says "Startup directory must be an absolute path without NUL characters."
+// in the language of msgs.
+func (msgs Messages) SetHostDirectoryInvalid() string {
+	return Catalog.Format(msgs.locale, "setHostDirectoryInvalid", nil)
+}
+
+// RelayTitle says "Relay"
+// in the language the app shows.
+func RelayTitle() string { return In(i18n.Locale()).RelayTitle() }
+
+// RelayTitle says "Relay"
+// in the language of msgs.
+func (msgs Messages) RelayTitle() string {
+	return Catalog.Format(msgs.locale, "relayTitle", nil)
+}
+
+// RelayDetail says "Connect your devices through your relay server."
+// in the language the app shows.
+func RelayDetail() string { return In(i18n.Locale()).RelayDetail() }
+
+// RelayDetail says "Connect your devices through your relay server."
+// in the language of msgs.
+func (msgs Messages) RelayDetail() string {
+	return Catalog.Format(msgs.locale, "relayDetail", nil)
+}
+
+// RelayURL says "Relay URL"
+// in the language the app shows.
+func RelayURL() string { return In(i18n.Locale()).RelayURL() }
+
+// RelayURL says "Relay URL"
+// in the language of msgs.
+func (msgs Messages) RelayURL() string {
+	return Catalog.Format(msgs.locale, "relayURL", nil)
+}
+
+// RelayURLDetail says "Use HTTPS, or HTTP for a local server."
+// in the language the app shows.
+func RelayURLDetail() string { return In(i18n.Locale()).RelayURLDetail() }
+
+// RelayURLDetail says "Use HTTPS, or HTTP for a local server."
+// in the language of msgs.
+func (msgs Messages) RelayURLDetail() string {
+	return Catalog.Format(msgs.locale, "relayURLDetail", nil)
+}
+
+// RelayApply says "Apply"
+// in the language the app shows.
+func RelayApply() string { return In(i18n.Locale()).RelayApply() }
+
+// RelayApply says "Apply"
+// in the language of msgs.
+func (msgs Messages) RelayApply() string {
+	return Catalog.Format(msgs.locale, "relayApply", nil)
+}
+
+// RelaySignIn says "Sign in with Google"
+// in the language the app shows.
+func RelaySignIn() string { return In(i18n.Locale()).RelaySignIn() }
+
+// RelaySignIn says "Sign in with Google"
+// in the language of msgs.
+func (msgs Messages) RelaySignIn() string {
+	return Catalog.Format(msgs.locale, "relaySignIn", nil)
+}
+
+// RelaySignOut says "Sign out"
+// in the language the app shows.
+func RelaySignOut() string { return In(i18n.Locale()).RelaySignOut() }
+
+// RelaySignOut says "Sign out"
+// in the language of msgs.
+func (msgs Messages) RelaySignOut() string {
+	return Catalog.Format(msgs.locale, "relaySignOut", nil)
+}
+
+// RelaySignedOut says "Signed out"
+// in the language the app shows.
+func RelaySignedOut() string { return In(i18n.Locale()).RelaySignedOut() }
+
+// RelaySignedOut says "Signed out"
+// in the language of msgs.
+func (msgs Messages) RelaySignedOut() string {
+	return Catalog.Format(msgs.locale, "relaySignedOut", nil)
+}
+
+// RelayConnecting says "Connecting…"
+// in the language the app shows.
+func RelayConnecting() string { return In(i18n.Locale()).RelayConnecting() }
+
+// RelayConnecting says "Connecting…"
+// in the language of msgs.
+func (msgs Messages) RelayConnecting() string {
+	return Catalog.Format(msgs.locale, "relayConnecting", nil)
+}
+
+// RelayConnected says "Connected"
+// in the language the app shows.
+func RelayConnected() string { return In(i18n.Locale()).RelayConnected() }
+
+// RelayConnected says "Connected"
+// in the language of msgs.
+func (msgs Messages) RelayConnected() string {
+	return Catalog.Format(msgs.locale, "relayConnected", nil)
+}
+
+// RelayFailed says "Connection failed"
+// in the language the app shows.
+func RelayFailed() string { return In(i18n.Locale()).RelayFailed() }
+
+// RelayFailed says "Connection failed"
+// in the language of msgs.
+func (msgs Messages) RelayFailed() string {
+	return Catalog.Format(msgs.locale, "relayFailed", nil)
+}
+
+// RelayWaiting says "Waiting for sign-in…"
+// in the language the app shows.
+func RelayWaiting() string { return In(i18n.Locale()).RelayWaiting() }
+
+// RelayWaiting says "Waiting for sign-in…"
+// in the language of msgs.
+func (msgs Messages) RelayWaiting() string {
+	return Catalog.Format(msgs.locale, "relayWaiting", nil)
+}
+
+// RelayHosting says "Allow remote control on this device"
+// in the language the app shows.
+func RelayHosting() string { return In(i18n.Locale()).RelayHosting() }
+
+// RelayHosting says "Allow remote control on this device"
+// in the language of msgs.
+func (msgs Messages) RelayHosting() string {
+	return Catalog.Format(msgs.locale, "relayHosting", nil)
+}
+
+// RelayHostingDetail says "Share this workspace with your signed-in devices, including sessions on connected remote hosts."
+// in the language the app shows.
+func RelayHostingDetail() string { return In(i18n.Locale()).RelayHostingDetail() }
+
+// RelayHostingDetail says "Share this workspace with your signed-in devices, including sessions on connected remote hosts."
+// in the language of msgs.
+func (msgs Messages) RelayHostingDetail() string {
+	return Catalog.Format(msgs.locale, "relayHostingDetail", nil)
+}
+
+// RelayDevices says "Devices"
+// in the language the app shows.
+func RelayDevices() string { return In(i18n.Locale()).RelayDevices() }
+
+// RelayDevices says "Devices"
+// in the language of msgs.
+func (msgs Messages) RelayDevices() string {
+	return Catalog.Format(msgs.locale, "relayDevices", nil)
+}
+
+// RelayRefresh says "Refresh"
+// in the language the app shows.
+func RelayRefresh() string { return In(i18n.Locale()).RelayRefresh() }
+
+// RelayRefresh says "Refresh"
+// in the language of msgs.
+func (msgs Messages) RelayRefresh() string {
+	return Catalog.Format(msgs.locale, "relayRefresh", nil)
+}
+
+// RelayRevoke says "Revoke"
+// in the language the app shows.
+func RelayRevoke() string { return In(i18n.Locale()).RelayRevoke() }
+
+// RelayRevoke says "Revoke"
+// in the language of msgs.
+func (msgs Messages) RelayRevoke() string {
+	return Catalog.Format(msgs.locale, "relayRevoke", nil)
+}
+
+// RelayThisDevice says "This device"
+// in the language the app shows.
+func RelayThisDevice() string { return In(i18n.Locale()).RelayThisDevice() }
+
+// RelayThisDevice says "This device"
+// in the language of msgs.
+func (msgs Messages) RelayThisDevice() string {
+	return Catalog.Format(msgs.locale, "relayThisDevice", nil)
+}
+
+// RelayNoDevices says "No devices found."
+// in the language the app shows.
+func RelayNoDevices() string { return In(i18n.Locale()).RelayNoDevices() }
+
+// RelayNoDevices says "No devices found."
+// in the language of msgs.
+func (msgs Messages) RelayNoDevices() string {
+	return Catalog.Format(msgs.locale, "relayNoDevices", nil)
+}
+
+// RelayBusy says "Working…"
+// in the language the app shows.
+func RelayBusy() string { return In(i18n.Locale()).RelayBusy() }
+
+// RelayBusy says "Working…"
+// in the language of msgs.
+func (msgs Messages) RelayBusy() string {
+	return Catalog.Format(msgs.locale, "relayBusy", nil)
+}
+
+// RelayCallbackError says "No sign-in is in progress."
+// in the language the app shows.
+func RelayCallbackError() string { return In(i18n.Locale()).RelayCallbackError() }
+
+// RelayCallbackError says "No sign-in is in progress."
+// in the language of msgs.
+func (msgs Messages) RelayCallbackError() string {
+	return Catalog.Format(msgs.locale, "relayCallbackError", nil)
+}
+
+// RelayControlledNotice says "This terminal is being controlled from another device."
+// in the language the app shows.
+func RelayControlledNotice() string { return In(i18n.Locale()).RelayControlledNotice() }
+
+// RelayControlledNotice says "This terminal is being controlled from another device."
+// in the language of msgs.
+func (msgs Messages) RelayControlledNotice() string {
+	return Catalog.Format(msgs.locale, "relayControlledNotice", nil)
+}
+
+// RelayTakeBack says "Take Back Control"
+// in the language the app shows.
+func RelayTakeBack() string { return In(i18n.Locale()).RelayTakeBack() }
+
+// RelayTakeBack says "Take Back Control"
+// in the language of msgs.
+func (msgs Messages) RelayTakeBack() string {
+	return Catalog.Format(msgs.locale, "relayTakeBack", nil)
+}
+
+// RelayPaneUnavailable says "This pane is not available over remote control."
+// in the language the app shows.
+func RelayPaneUnavailable() string { return In(i18n.Locale()).RelayPaneUnavailable() }
+
+// RelayPaneUnavailable says "This pane is not available over remote control."
+// in the language of msgs.
+func (msgs Messages) RelayPaneUnavailable() string {
+	return Catalog.Format(msgs.locale, "relayPaneUnavailable", nil)
+}
+
+// RelayControlEnded says "Remote control ended."
+// in the language the app shows.
+func RelayControlEnded() string { return In(i18n.Locale()).RelayControlEnded() }
+
+// RelayControlEnded says "Remote control ended."
+// in the language of msgs.
+func (msgs Messages) RelayControlEnded() string {
+	return Catalog.Format(msgs.locale, "relayControlEnded", nil)
+}
+
 // ActionSettings says "Settings…"
 // in the language the app shows.
 func ActionSettings() string { return In(i18n.Locale()).ActionSettings() }
@@ -2592,6 +2982,26 @@ func (msgs Messages) BgPlain() string {
 	return Catalog.Format(msgs.locale, "bgPlain", nil)
 }
 
+// SetTerminalBackend says "Terminal engine"
+// in the language the app shows.
+func SetTerminalBackend() string { return In(i18n.Locale()).SetTerminalBackend() }
+
+// SetTerminalBackend says "Terminal engine"
+// in the language of msgs.
+func (msgs Messages) SetTerminalBackend() string {
+	return Catalog.Format(msgs.locale, "setTerminalBackend", nil)
+}
+
+// SetTerminalBackendDetail says "Choose the engine used to render terminals."
+// in the language the app shows.
+func SetTerminalBackendDetail() string { return In(i18n.Locale()).SetTerminalBackendDetail() }
+
+// SetTerminalBackendDetail says "Choose the engine used to render terminals."
+// in the language of msgs.
+func (msgs Messages) SetTerminalBackendDetail() string {
+	return Catalog.Format(msgs.locale, "setTerminalBackendDetail", nil)
+}
+
 // SetText says "Text"
 // in the language the app shows.
 func SetText() string { return In(i18n.Locale()).SetText() }
@@ -4978,11 +5388,11 @@ func (msgs Messages) HostRefused(host string) string {
 	return Catalog.Format(msgs.locale, "hostRefused", map[string]any{"host": host})
 }
 
-// HostAuthHint says "Kero signs in with your SSH keys and agent, and never asks for a password. To trust a host's key, run ssh {address} o…"
+// HostAuthHint says "Check your SSH credentials and host key. For details, run ssh {address} in a terminal."
 // in the language the app shows.
 func HostAuthHint(address string) string { return In(i18n.Locale()).HostAuthHint(address) }
 
-// HostAuthHint says "Kero signs in with your SSH keys and agent, and never asks for a password. To trust a host's key, run ssh {address} o…"
+// HostAuthHint says "Check your SSH credentials and host key. For details, run ssh {address} in a terminal."
 // in the language of msgs.
 func (msgs Messages) HostAuthHint(address string) string {
 	return Catalog.Format(msgs.locale, "hostAuthHint", map[string]any{"address": address})

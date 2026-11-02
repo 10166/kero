@@ -39,6 +39,45 @@ func TestStreamResizedInOrder(t *testing.T) {
 	}
 }
 
+func TestStreamLeaseStateInOrder(t *testing.T) {
+	var wire bytes.Buffer
+	proto.WriteFrame(&wire, proto.FrameOutput, []byte("before"))
+	proto.WriteFrame(&wire, proto.FrameLease, []byte(`{"held":true,"owner":true,"request":"acquire","granted":true}`))
+	proto.WriteFrame(&wire, proto.FrameOutput, []byte("after"))
+	proto.WriteFrame(&wire, proto.FrameLease, []byte(`{"held":false,"owner":false}`))
+	s := &Stream{r: bufio.NewReader(&wire), Gone: make(chan struct{})}
+	var log []string
+	s.OnLeaseState = func(state proto.LeaseState) {
+		if state.Request == proto.LeaseAcquire && state.Granted && state.Owner {
+			log = append(log, "acquired")
+		} else if !state.Held && !state.Owner {
+			log = append(log, "revoked")
+		} else {
+			t.Errorf("unexpected lease state: %+v", state)
+		}
+	}
+	buf := make([]byte, 64)
+	for {
+		n, err := s.Read(buf)
+		if n > 0 {
+			log = append(log, string(buf[:n]))
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+	if len(log) != 4 || log[0] != "before" || log[1] != "acquired" || log[2] != "after" || log[3] != "revoked" {
+		t.Errorf("stream order = %q", log)
+	}
+}
+
+func TestLeaseRequiresDaemonSupport(t *testing.T) {
+	s := &Stream{}
+	if s.AcquireLease() == nil || s.ReleaseLease() == nil || s.ReclaimLease() == nil || s.RequestSnapshot() == nil {
+		t.Fatal("lease request accepted by an old daemon")
+	}
+}
+
 // Output past what a frame carries, as a terminal's frame with the pixels
 // of an image, goes in frames of its own, which a stream reads as one.
 func TestStreamLargeOutput(t *testing.T) {

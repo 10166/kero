@@ -74,10 +74,11 @@ const (
 // termEntry is a session's terminal in the app: attached to kerod, which
 // streams the session to it.
 type termEntry struct {
-	term    *terminal.Terminal
-	stream  *client.Stream
-	err     string
-	started time.Time
+	term      terminalSurface
+	stream    *client.Stream
+	err       string
+	started   time.Time
+	leaseHeld bool
 }
 
 // App is the app's state. It lives on the main thread: other goroutines
@@ -92,10 +93,14 @@ type App struct {
 	// hosts are the kerods the app shows, this machine's first; st is
 	// what they hold, each host's sessions and projects after the one's
 	// before, and owner the host of each session, pane and project.
-	hosts  []*host
-	owner  map[string]*host
-	st     proto.State
-	loaded bool // a state came
+	hosts        []*host
+	owner        map[string]*host
+	st           proto.State
+	relay        relayUI
+	relayBackend *relayBackend
+	relayPanes   map[string]relayPaneTarget
+	sshAuth      sshPromptState
+	loaded       bool // a state came
 
 	prefs      prefs
 	set        settings.Settings // the user's settings: Settings' controls edit it
@@ -344,6 +349,7 @@ func (a *App) setState(h *host, st proto.State) {
 		a.selectSession(a.selected)
 	}
 	a.notify(first)
+	a.updateRelayTopology()
 	a.updateTitle()
 }
 
@@ -621,9 +627,14 @@ func (a *App) ensureTerm(id string) {
 	if a.terms[id] != nil || h.conn != connReady || a.isBrowser(id) {
 		return
 	}
+	if target, ok := a.relayPanes[id]; ok {
+		a.ensureRelayTerm(id, target)
+		return
+	}
 	e := &termEntry{started: time.Now()}
 	a.terms[id] = e
 	dialer := h.dialer()
+	backend := a.set.TerminalBackend
 	go func() {
 		stream, err := client.AttachVia(dialer, id)
 		if err != nil {
@@ -634,6 +645,13 @@ func (a *App) ensureTerm(id string) {
 			})
 			return
 		}
+		stream.OnLeaseState = func(state proto.LeaseState) {
+			a.update(func() {
+				if a.terms[id] == e {
+					e.leaseHeld = state.Held && !state.Owner
+				}
+			})
+		}
 		g := &gated{Stream: stream, ready: make(chan struct{})}
 		o := a.termOptions(id, g)
 		// The terminal shows kerod's frames: kerod's terminal is the
@@ -641,7 +659,7 @@ func (a *App) ensureTerm(id string) {
 		// nothing of the program's own. It takes the sizes kerod's does,
 		// between the frames of one size and the next.
 		o.ResizeByConn = true
-		term, err := terminal.New(o)
+		term, err := newTerminalSurface(backend, o)
 		if err != nil {
 			stream.Close()
 			a.update(func() {
@@ -751,15 +769,16 @@ var commandKeys = map[ui.Key]byte{
 func (a *App) termOptions(id string, conn *gated) terminal.Options {
 	light, dark := a.termThemes()
 	o := terminal.Options{
-		Conn:          conn,
-		Font:          a.termFont(),
-		Theme:         light,
-		DarkTheme:     dark,
-		Cursor:        map[string]terminal.CursorStyle{"block": terminal.CursorBlock, "bar": terminal.CursorBar, "underline": terminal.CursorUnderline}[a.set.Cursor],
-		NoBlink:       !a.set.CursorBlink,
-		OptionAsAlt:   a.set.OptionAsAlt,
-		ClipboardRead: map[string]terminal.ClipboardAccess{"ask": terminal.ClipboardAsk, "allow": terminal.ClipboardAllow, "deny": terminal.ClipboardDeny}[a.set.Clipboard],
-		RightClick:    map[string]terminal.RightClickAction{"menu": terminal.RightClickContextMenu, "paste": terminal.RightClickPaste, "copyOrPaste": terminal.RightClickCopyOrPaste}[a.set.RightClick],
+		Conn:                      conn,
+		Font:                      a.termFont(),
+		Theme:                     light,
+		DarkTheme:                 dark,
+		Cursor:                    map[string]terminal.CursorStyle{"block": terminal.CursorBlock, "bar": terminal.CursorBar, "underline": terminal.CursorUnderline}[a.set.Cursor],
+		NoBlink:                   !a.set.CursorBlink,
+		OptionAsAlt:               a.set.OptionAsAlt,
+		SelectOnCapturedMouseDrag: true,
+		ClipboardRead:             map[string]terminal.ClipboardAccess{"ask": terminal.ClipboardAsk, "allow": terminal.ClipboardAllow, "deny": terminal.ClipboardDeny}[a.set.Clipboard],
+		RightClick:                map[string]terminal.RightClickAction{"menu": terminal.RightClickContextMenu, "paste": terminal.RightClickPaste, "copyOrPaste": terminal.RightClickCopyOrPaste}[a.set.RightClick],
 		// The pane's card shows under it, dimmed when the user is in
 		// another pane.
 		Transparent: true,
@@ -869,9 +888,9 @@ func (a *App) apply(s settings.Settings, save bool) {
 		old.LineHeight != s.LineHeight || old.Ligatures != s.Ligatures || old.Thicken != s.Thicken
 	themes := old.LightTheme != s.LightTheme || old.DarkTheme != s.DarkTheme
 	anew := old.Cursor != s.Cursor || old.CursorBlink != s.CursorBlink || old.OptionAsAlt != s.OptionAsAlt ||
-		old.Clipboard != s.Clipboard || old.RightClick != s.RightClick
+		old.Clipboard != s.Clipboard || old.RightClick != s.RightClick || old.TerminalBackend != s.TerminalBackend
 	light, dark := a.termThemes()
-	retune := func(t *terminal.Terminal) {
+	retune := func(t terminalSurface) {
 		if font {
 			t.SetFont(a.termFont())
 		}
@@ -940,6 +959,10 @@ func (a *App) apply(s settings.Settings, save bool) {
 	if !slices.Equal(old.Hosts, s.Hosts) && a.win != nil {
 		a.syncHosts()
 	}
+	if a.win != nil {
+		a.relaySettingsChanged(old)
+	}
+	a.updateRelayTopology()
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -1171,8 +1194,12 @@ func (a *App) newSessionOn(h *host, projectID string) {
 	if a.set.NewSessionDir == "home" {
 		p.Dir = home
 	}
-	if p.Project == "" && len(a.projectsOf(h)) == 0 {
-		p.Dir = home
+	if p.Dir == "" && p.Project == "" {
+		if h.remote() && h.cfg.Directory != "" {
+			p.Dir = h.cfg.Directory
+		} else if len(a.projectsOf(h)) == 0 {
+			p.Dir = home
+		}
 	}
 	a.create(h, p, "")
 }

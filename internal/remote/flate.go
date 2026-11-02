@@ -20,6 +20,7 @@ const deflate = "deflate"
 // the transport of its own, a WebSocket message or a pipe's.
 type flateConn struct {
 	rwc io.ReadWriteCloser
+	rmu sync.Mutex
 	r   io.ReadCloser
 	wmu sync.Mutex
 	bw  *bufio.Writer
@@ -33,7 +34,11 @@ func newFlateConn(rwc io.ReadWriteCloser) *flateConn {
 	return &flateConn{rwc: rwc, r: flate.NewReader(rwc), bw: bw, w: w}
 }
 
-func (c *flateConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+func (c *flateConn) Read(p []byte) (int, error) {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	return c.r.Read(p)
+}
 
 func (c *flateConn) Write(p []byte) (int, error) {
 	c.wmu.Lock()
@@ -49,6 +54,11 @@ func (c *flateConn) Write(p []byte) (int, error) {
 }
 
 func (c *flateConn) Close() error {
+	// Close the transport first to interrupt a blocked read before waiting
+	// for the decompressor, which is not safe to close concurrently.
+	err := c.rwc.Close()
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
 	c.r.Close()
-	return c.rwc.Close()
+	return err
 }

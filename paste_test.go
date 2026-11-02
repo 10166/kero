@@ -150,7 +150,7 @@ func TestPasteImageAsPath(t *testing.T) {
 // as a paste, which they take for a file dropped.
 func TestPasteImageBracketed(t *testing.T) {
 	a, sink, dir := pasteApp(t)
-	a.terms["a"].term.Feed([]byte("\x1b[?2004h"))
+	a.terms["a"].term.(*terminal.Terminal).Feed([]byte("\x1b[?2004h"))
 	if !a.pasteImage("a", imageData()) {
 		t.Fatal("the paste of an image was left to the terminal")
 	}
@@ -324,15 +324,13 @@ func TestPasteImageEachItsOwnFile(t *testing.T) {
 // image is not offered to the program, nor pasted as nothing.
 func TestPasteImageByKeys(t *testing.T) {
 	a, sink, dir := pasteApp(t)
-	term := a.terms["a"].term
 	// A terminal of the app's options, as the app makes them.
-	term.Close()
+	a.terms["a"].term.Close()
 	sink = newSink()
 	o := a.termOptions("a", nil)
 	o.Conn = sink
 	o.ResizeByConn = false
-	var err error
-	term, err = terminal.New(o)
+	term, err := terminal.New(o)
 	if err != nil {
 		t.Fatal(err)
 	}

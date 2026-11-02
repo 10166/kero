@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,6 +125,7 @@ var keys = []key{
 	choiceKey("language", "the app's language; system follows the system's", func(s *Settings) *string { return &s.Language }, append([]string{"system"}, Languages...)...),
 	boolKey("window-translucent", "let the desktop show through the window", func(s *Settings) *bool { return &s.Vibrancy }),
 
+	choiceKey("terminal-backend", "the terminal engine", func(s *Settings) *string { return &s.TerminalBackend }, "libghostty", "alacritty"),
 	stringKey("font-family", "the terminals' font: empty for JetBrains Mono Nerd Font, which Kero carries; monospace for the system's", func(s *Settings) *string { return &s.FontFamily }),
 	numberKey("font-size", "in points", func(s *Settings) float64 { return float64(s.FontSize) }, func(s *Settings, n float64) { s.FontSize = float32(n) }),
 	numberKey("font-weight", "100 to 900", func(s *Settings) float64 { return float64(s.FontWeight) }, func(s *Settings, n float64) { s.FontWeight = int(n) }),
@@ -231,7 +233,9 @@ var keys = []key{
 	boolKey("dock-bounce", "once, when a session comes to need you", func(s *Settings) *bool { return &s.BounceDock }),
 
 	boolKey("remote-control", "kero do, kero focus and kero browser drive the app", func(s *Settings) *bool { return &s.RemoteControl }),
-	{name: "host", doc: "another machine whose sessions the app shows, as name=address: [user@]host or ssh://… over SSH, wsl://distro, http(s)://… for kerod's tailnet listener; add remote-control after it to let its programs drive the app, and color=red, orange, amber, green, teal, blue, purple or pink to mark its sessions; repeat it", list: true,
+	stringKey("relay-url", "the self-hosted relay's URL", func(s *Settings) *string { return &s.RelayURL }),
+	boolKey("relay-host-enabled", "allow this device to host through the relay", func(s *Settings) *bool { return &s.RelayHostEnabled }),
+	{name: "host", doc: "another machine, as name=address; repeat it. Options: remote-control, color=red/orange/amber/green/teal/blue/purple/pink; display-name64, uuid64 and directory64 hold unpadded URL-safe base64 UTF-8 metadata", list: true,
 		get: func(s *Settings) []string {
 			var out []string
 			for _, h := range s.Hosts {
@@ -241,6 +245,13 @@ var keys = []key{
 				}
 				if h.Color != "" {
 					v += " color=" + h.Color
+				}
+				for _, option := range []struct{ key, value string }{
+					{"display-name64", h.DisplayName}, {"uuid64", h.UUID}, {"directory64", h.Directory},
+				} {
+					if option.value != "" {
+						v += " " + option.key + "=" + base64.RawURLEncoding.EncodeToString([]byte(option.value))
+					}
 				}
 				out = append(out, v)
 			}

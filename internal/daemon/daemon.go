@@ -677,7 +677,7 @@ func (d *Daemon) serveHello(conn net.Conn, r *bufio.Reader, line []byte, id iden
 			id.peer = localPeer(conn)
 		}
 	}
-	welcome := proto.Welcome{Version: proto.Version, PID: os.Getpid(), Started: d.started.UnixMilli(), App: build.Version(), Build: build.Daemon}
+	welcome := proto.Welcome{Version: proto.Version, PID: os.Getpid(), Started: d.started.UnixMilli(), App: build.Version(), Build: build.Daemon, LeaseRevoke: true}
 	if hello.Version != proto.Version {
 		welcome.Error = fmt.Sprintf("kerod speaks protocol %d, the client %d", proto.Version, hello.Version)
 		json.NewEncoder(conn).Encode(welcome)
@@ -699,7 +699,7 @@ func (d *Daemon) serveHello(conn net.Conn, r *bufio.Reader, line []byte, id iden
 	}()
 	switch hello.Kind {
 	case "attach":
-		d.serveAttach(conn, r, hello, welcome)
+		d.serveAttach(conn, r, hello, welcome, id.via == "unix")
 	default:
 		json.NewEncoder(conn).Encode(welcome)
 		d.serveControl(conn, r)
@@ -718,7 +718,7 @@ func (d *Daemon) clientList() []proto.ClientInfo {
 	return out
 }
 
-func (d *Daemon) serveAttach(conn net.Conn, r *bufio.Reader, hello proto.Hello, welcome proto.Welcome) {
+func (d *Daemon) serveAttach(conn net.Conn, r *bufio.Reader, hello proto.Hello, welcome proto.Welcome, local bool) {
 	s := d.findPane(hello.Session)
 	if s == nil {
 		welcome.Error = "no session " + hello.Session
@@ -734,6 +734,8 @@ func (d *Daemon) serveAttach(conn net.Conn, r *bufio.Reader, hello proto.Hello, 
 	}
 	defer s.detach(a)
 	defer a.finish()
+	welcome.Lease = true
+	welcome.Snapshot = true
 	welcome.Cols, welcome.Rows = cols, rows
 	if err := json.NewEncoder(conn).Encode(welcome); err != nil {
 		return
@@ -742,6 +744,7 @@ func (d *Daemon) serveAttach(conn net.Conn, r *bufio.Reader, hello proto.Hello, 
 		return
 	}
 	go a.write()
+	go s.consumeControllerInput(a)
 	for {
 		kind, payload, err := proto.ReadFrame(r)
 		if err != nil {
@@ -749,16 +752,21 @@ func (d *Daemon) serveAttach(conn net.Conn, r *bufio.Reader, hello proto.Hello, 
 		}
 		switch kind {
 		case proto.FrameInput:
-			if typed(payload) {
-				s.claim(a)
+			if !s.controllerInput(a, payload) {
+				s.inputFrom(a, payload)
 			}
-			s.input(payload)
 		case proto.FrameResize:
 			if c, rr, cw, ch, ok := proto.ParseResizePixels(payload); ok {
 				s.ask(a, c, rr, cw, ch)
 			}
 		case proto.FrameClaim:
 			s.claim(a)
+		case proto.FrameLease:
+			s.leaseRequest(a, string(payload), local)
+		case proto.FrameSnapshot:
+			if len(payload) == 0 {
+				s.snapshot(a)
+			}
 		case proto.FrameTheme:
 			if th, ok := proto.ParseTheme(payload); ok {
 				d.useTheme(th)

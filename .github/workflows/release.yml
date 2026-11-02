@@ -64,6 +64,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: Build the Alacritty terminal engine
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          scripts/build-go-alacritty.sh --universal
       - name: Install NSIS, for the Windows installers
         if: matrix.name == 'Windows'
         run: sudo apt-get update && sudo apt-get install -y nsis
@@ -97,7 +102,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-        run: go tool mygo build -platform "${{ matrix.platform }}" -upload
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            GOFLAGS=-mod=mod CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo build -platform "${{ matrix.platform }}" -upload
+          else
+            go tool mygo build -platform "${{ matrix.platform }}" -upload
+          fi
 
   # What a release is of passes its tests, as from a branch run by hand.
   test:
