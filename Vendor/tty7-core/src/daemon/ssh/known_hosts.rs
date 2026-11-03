@@ -29,6 +29,16 @@ pub fn default_path() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".ssh").join("known_hosts"))
 }
 
+/// An empty explicit list means the default user file; a non-empty list is the
+/// OpenSSH `UserKnownHostsFile` list in the order given by the user.
+fn effective_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    if paths.is_empty() {
+        default_path().into_iter().collect()
+    } else {
+        paths.to_vec()
+    }
+}
+
 #[cfg(unix)]
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
@@ -56,6 +66,46 @@ pub fn check(host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
         Some(path) => check_in_file(&path, host, port, key),
         None => HostKeyStatus::Unknown,
     }
+}
+
+/// Apply the same safety ordering across every file in a
+/// `UserKnownHostsFile` list. A contradiction anywhere outranks a match
+/// elsewhere: silently preferring a later trusted line could turn a changed
+/// key in one file into a quiet success because an older file still had the
+/// stale key.
+pub fn check_paths(paths: &[PathBuf], host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
+    let paths = effective_paths(paths);
+    let mut known = false;
+    let mut changed = None;
+    let mut changed_other_algorithm = None;
+    for path in paths {
+        match check_in_file(&path, host, port, key) {
+            HostKeyStatus::Revoked => return HostKeyStatus::Revoked,
+            HostKeyStatus::Known => known = true,
+            HostKeyStatus::Changed { old_fingerprint_sha256 } => {
+                changed.get_or_insert(old_fingerprint_sha256);
+            }
+            HostKeyStatus::ChangedAlgorithm {
+                known_fingerprint_sha256,
+                known_algorithm,
+            } => {
+                changed_other_algorithm.get_or_insert((known_fingerprint_sha256, known_algorithm));
+            }
+            HostKeyStatus::Unknown => {}
+        }
+    }
+    if let Some(old_fingerprint_sha256) = changed {
+        return HostKeyStatus::Changed {
+            old_fingerprint_sha256,
+        };
+    }
+    if let Some((known_fingerprint_sha256, known_algorithm)) = changed_other_algorithm {
+        return HostKeyStatus::ChangedAlgorithm {
+            known_fingerprint_sha256,
+            known_algorithm,
+        };
+    }
+    if known { HostKeyStatus::Known } else { HostKeyStatus::Unknown }
 }
 
 pub fn check_in_file(path: &Path, host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
@@ -146,6 +196,18 @@ pub fn known_algorithms(host: &str, port: u16) -> Vec<Algorithm> {
     }
 }
 
+pub fn known_algorithms_paths(paths: &[PathBuf], host: &str, port: u16) -> Vec<Algorithm> {
+    effective_paths(paths)
+        .into_iter()
+        .flat_map(|path| known_algorithms_in_file(&path, host, port))
+        .fold(Vec::new(), |mut all, algorithm| {
+            if !all.contains(&algorithm) {
+                all.push(algorithm);
+            }
+            all
+        })
+}
+
 pub fn known_algorithms_in_file(path: &Path, host: &str, port: u16) -> Vec<Algorithm> {
     match std::fs::read_to_string(path) {
         Ok(contents) => known_algorithms_in_str(&contents, host, port),
@@ -177,6 +239,21 @@ pub fn append_trusted(host: &str, port: u16, key: &PublicKey) -> std::io::Result
         std::io::Error::new(std::io::ErrorKind::NotFound, "no home dir for known_hosts")
     })?;
     append_trusted_to(&path, host, port, key)
+}
+
+/// OpenSSH writes a newly accepted key to the first user file. If the user
+/// listed no explicit file, that remains Kero's usual user file.
+pub fn append_trusted_in_paths(
+    paths: &[PathBuf],
+    host: &str,
+    port: u16,
+    key: &PublicKey,
+) -> std::io::Result<()> {
+    let paths = effective_paths(paths);
+    let path = paths.first().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no known_hosts file configured")
+    })?;
+    append_trusted_to(path, host, port, key)
 }
 
 pub fn append_trusted_to(
@@ -332,6 +409,21 @@ pub fn forget_superseded(host: &str, port: u16, key: &PublicKey) -> std::io::Res
         Some(path) => forget_superseded_in_file(&path, host, port, key),
         None => Ok(()),
     }
+}
+
+/// Remove the key being overridden from every file in the list. Otherwise a
+/// changed-key acceptance in the first file would keep colliding with the old
+/// line in a later file forever.
+pub fn forget_superseded_paths(
+    paths: &[PathBuf],
+    host: &str,
+    port: u16,
+    key: &PublicKey,
+) -> std::io::Result<()> {
+    for path in effective_paths(paths) {
+        forget_superseded_in_file(&path, host, port, key)?;
+    }
+    Ok(())
 }
 
 pub fn forget_superseded_in_file(
@@ -809,6 +901,56 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_file_list_finds_the_key_in_a_later_file() {
+        let dir = std::env::temp_dir().join(format!("tty7-kh-list-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first");
+        let second = dir.join("second");
+        std::fs::write(&first, "other.example.com A\n").unwrap();
+        std::fs::write(&second, format!("example.com {KEY_A}\n")).unwrap();
+        assert_eq!(
+            check_paths(
+                &[first, second],
+                "example.com",
+                22,
+                &key(KEY_A)
+            ),
+            HostKeyStatus::Known
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_changed_key_in_any_custom_file_outranks_a_trusted_match_elsewhere() {
+        let dir = std::env::temp_dir().join(format!("tty7-kh-list-change-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first");
+        let second = dir.join("second");
+        std::fs::write(&first, format!("example.com {KEY_A}\n")).unwrap();
+        std::fs::write(&second, format!("example.com {KEY_B}\n")).unwrap();
+        assert!(matches!(
+            check_paths(&[first, second], "example.com", 22, &key(KEY_B)),
+            HostKeyStatus::Changed { .. }
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_revoked_key_in_any_custom_file_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("tty7-kh-list-revoked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first");
+        let second = dir.join("second");
+        std::fs::write(&first, format!("example.com {KEY_A}\n")).unwrap();
+        std::fs::write(&second, format!("@revoked example.com {KEY_A}\n")).unwrap();
+        assert_eq!(
+            check_paths(&[first, second], "example.com", 22, &key(KEY_A)),
+            HostKeyStatus::Revoked
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn cert_authority_line_is_skipped_not_flagged_as_changed() {
         let ka = key(KEY_A);
         let file = format!("@cert-authority example.com {KEY_B}\n");
@@ -1000,6 +1142,34 @@ mod tests {
         );
         assert!(matches!(
             check_in_str(&contents, "example.com", 22, &key(KEY_A)),
+            HostKeyStatus::Changed { .. }
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn overriding_across_a_custom_file_list_clears_the_old_contradiction() {
+        let dir =
+            std::env::temp_dir().join(format!("tty7-kh-list-supersede-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first");
+        let second = dir.join("second");
+        std::fs::write(&first, format!("example.com {KEY_A}\n")).unwrap();
+        std::fs::write(&second, "unrelated.example.com other\n").unwrap();
+
+        let kb = key(KEY_B);
+        forget_superseded_paths(&[first.clone(), second.clone()], "example.com", 22, &kb).unwrap();
+        append_trusted_in_paths(&[first.clone(), second.clone()], "example.com", 22, &kb).unwrap();
+
+        let first_contents = std::fs::read_to_string(&first).unwrap();
+        assert!(first_contents.contains(KEY_B));
+        assert!(!first_contents.contains(KEY_A));
+        assert_eq!(
+            check_paths(&[dir.join("missing"), first.clone()], "example.com", 22, &kb),
+            HostKeyStatus::Known
+        );
+        assert!(matches!(
+            check_paths(&[first], "example.com", 22, &key(KEY_A)),
             HostKeyStatus::Changed { .. }
         ));
         std::fs::remove_dir_all(&dir).ok();

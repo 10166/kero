@@ -39,6 +39,8 @@ AllowUsers {user}
 LogLevel VERBOSE
 """)
     fingerprint = subprocess.check_output(["ssh-keygen", "-lf", str(directory / "host.pub"), "-E", "sha256"], text=True).split()[1]
+    (directory / "known_hosts").write_text(f"[127.0.0.1]:{port} {(directory / 'host.pub').read_text().strip()}\n")
+    (directory / "known_hosts").chmod(0o600)
     fixture = directory / "fixture.json"
     fixture.write_text(json.dumps({"directory": str(directory), "port": port, "user": user, "fingerprint": fingerprint}))
     subprocess.run([sshd, "-t", "-f", str(config)], check=True)

@@ -148,6 +148,11 @@ impl FakeSshd {
         let handler = ClientHandler {
             host: spec.host.clone(),
             port: spec.port,
+            known_hosts_files: spec
+                .known_hosts_files
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
             verify_host_keys: false,
             skip_banner: true,
             broker: PromptBroker::new(Box::new(|_| true)),
@@ -204,6 +209,7 @@ pub(crate) fn base_spec() -> NativeSshSpec {
         user: "u".into(),
         auth_mode: SshAuthMode::Auto,
         identity_files: vec![],
+        known_hosts_files: vec![],
         agent_forward: false,
         password: None,
         key_passphrases: None,
@@ -343,6 +349,11 @@ impl PasswordFake {
         let handler = ClientHandler {
             host: spec.host.clone(),
             port: spec.port,
+            known_hosts_files: spec
+                .known_hosts_files
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
             verify_host_keys: false,
             skip_banner: true,
             broker: PromptBroker::new(Box::new(|_| true)),

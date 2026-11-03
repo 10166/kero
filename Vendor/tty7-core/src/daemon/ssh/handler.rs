@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use russh::Channel;
@@ -14,6 +15,7 @@ use super::known_hosts::{self, HostKeyStatus};
 pub struct ClientHandler {
     pub host: String,
     pub port: u16,
+    pub known_hosts_files: Vec<PathBuf>,
     pub verify_host_keys: bool,
     pub skip_banner: bool,
     pub broker: Arc<PromptBroker>,
@@ -112,9 +114,11 @@ impl ClientHandler {
             // rejected trusted for good. If it cannot be dropped, do not append
             // either: being asked again next time is the better half of that
             // trade.
-            match known_hosts::forget_superseded(&self.host, self.port, key) {
+            match known_hosts::forget_superseded_paths(&self.known_hosts_files, &self.host, self.port, key) {
                 Ok(()) => {
-                    if let Err(e) = known_hosts::append_trusted(&self.host, self.port, key) {
+                    if let Err(e) =
+                        known_hosts::append_trusted_in_paths(&self.known_hosts_files, &self.host, self.port, key)
+                    {
                         log::warn!("failed to record host key in known_hosts: {e}");
                     }
                 }
@@ -134,7 +138,8 @@ impl russh::client::Handler for ClientHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        let status = known_hosts::check(&self.host, self.port, server_public_key);
+        let status =
+            known_hosts::check_paths(&self.known_hosts_files, &self.host, self.port, server_public_key);
         if !self.verify_host_keys && matches!(status, HostKeyStatus::Revoked) {
             log::warn!(
                 "rejecting revoked host key for {}:{} despite verify_host_keys=false",

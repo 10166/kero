@@ -97,12 +97,21 @@ async fn native_install_and_disconnect_preserve_remote_shell() {
     let spec: NativeSshSpec = serde_json::from_value(serde_json::json!({
         "host": "127.0.0.1", "port": fixture["port"], "user": fixture["user"],
         "auth_mode": "public-key", "identity_files": [format!("{directory}/client")],
+        "known_hosts_files": [format!("{directory}/known_hosts")],
+        "verify_host_keys": true, "connect_timeout_s": 5
+    }))
+    .unwrap();
+    let reject_spec: NativeSshSpec = serde_json::from_value(serde_json::json!({
+        "host": "127.0.0.1", "port": fixture["port"], "user": fixture["user"],
+        "auth_mode": "public-key", "identity_files": [format!("{directory}/client")],
         "verify_host_keys": true, "connect_timeout_s": 5
     }))
     .unwrap();
     let reject = broker("SHA256:not-the-server".into());
     assert!(
-        NativeConnection::connect(&spec, &reject).await.is_err(),
+        NativeConnection::connect(&reject_spec, &reject)
+            .await
+            .is_err(),
         "unknown host keys must not be silently trusted"
     );
     let broker = broker(fingerprint);
